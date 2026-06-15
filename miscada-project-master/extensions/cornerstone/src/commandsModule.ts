@@ -53,6 +53,20 @@ const { segmentation: segmentationUtils } = cstUtils;
 // 在文件顶部添加全局变量
 let originSliceBlob: Blob | null = null;
 
+// LiteMedSAM (port 8002) 可用性缓存 —— 每次刷新页面检测一次
+let _liteMedSAMAvailable: boolean | null = null;
+async function isLiteMedSAMAvailable(): Promise<boolean> {
+  if (_liteMedSAMAvailable !== null) return _liteMedSAMAvailable;
+  try {
+    const resp = await fetch('http://localhost:8002/health', { signal: AbortSignal.timeout(1500) });
+    _liteMedSAMAvailable = resp.ok;
+  } catch {
+    _liteMedSAMAvailable = false;
+  }
+  console.log(`[SAM] LiteMedSAM (port 8002) available: ${_liteMedSAMAvailable}`);
+  return _liteMedSAMAvailable;
+}
+
 const getLabelmapTools = ({ toolGroupService }) => {
   const labelmapTools = [];
   const toolGroupIds = toolGroupService.getToolGroupIds();
@@ -975,15 +989,6 @@ function commandsModule({
 
       const fmt = (s: number) => s.toFixed(2);
 
-      if (!originSliceBlob) {
-        uiNotificationService.show({
-          title: 'Upload Image',
-          message: 'Please store the original slice first',
-          type: 'error',
-        });
-        return;
-      }
-      
       if (!csViewport) {
         uiNotificationService.show({
           title: 'Upload Image',
@@ -1072,6 +1077,17 @@ function commandsModule({
 
       const formData = new FormData();
       formData.append('sam_image', screenshotBlob, `image.${fileType}`);
+
+      // 提取当前切片的 SOPInstanceUID（用于后端直接读 DICOM）
+      let sopInstanceUID = '';
+      try {
+        const currentImageId = (csViewport as any).getCurrentImageId?.();
+        if (currentImageId) {
+          // imageId 格式示例: "wadors:http://localhost:8042/.../instances/{id}/..."
+          const match = currentImageId.match(/\/instances\/([^\/]+)\//i);
+          if (match) sopInstanceUID = match[1];
+        }
+      } catch { /* ignore */ }
       if (originSliceBlob) {
         formData.append('file', originSliceBlob, 'origin_slice.png');
       }
@@ -1106,25 +1122,75 @@ function commandsModule({
       }
       // ────────────────────────────────────────────────────────────────────────
 
-      const IMAGE_URL_PREFIX = 'http://localhost:8000';
       let samImageUrl = '';
       let rleData: { counts: number[]; starts_with: number; width: number; height: number } | null = null;
+      // Resolve which SAM backend to use for screenshot-based fallback path
+      const useLite = await isLiteMedSAMAvailable();
+      const SAM_PORT = useLite ? 8002 : 8000;
+      const IMAGE_URL_PREFIX = `http://localhost:${SAM_PORT}`;
+
       try {
-        const routeMap: Record<'points' | 'rectangle' | 'mask', string> = {
-          points: '/points',
-          rectangle: '/segment',
-          mask: '/mask', 
-        };
-        const route = routeMap[promptType];
+        // ── 优先路径 1：LiteMedSAM /segment_dicom (true DICOM pixels, fastest) ──
+        const bboxStr = formData.get('bbox') as string | null;
+        if (sopInstanceUID && bboxStr && promptType === 'rectangle') {
+          const bboxParts = bboxStr.split(',').map(Number);
+          // Try LiteMedSAM first, then MedSAM as fallback
+          const dicomPorts = useLite ? [8002, 8000] : [8000];
+          for (const port of dicomPorts) {
+            try {
+              const dicomResp = await fetch(`http://localhost:${port}/segment_dicom`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sop_instance_uid: sopInstanceUID, bbox: bboxParts }),
+              });
+              if (dicomResp.ok) {
+                const dicomData = await dicomResp.json();
+                if (dicomData.success) {
+                  rleData = dicomData.rle;
+                  if (dicomData.volume_mm3 != null) {
+                    console.log(`[SAM] Volume: ${dicomData.volume_mm3} mm³`);
+                    uiNotificationService.show({
+                      title: 'SAM 分割体积',
+                      message: `体积: ${dicomData.volume_mm3.toFixed(2)} mm³ (${dicomData.model ?? 'medsam'})`,
+                      type: 'info',
+                      duration: 5000,
+                    });
+                  }
+                  console.log(`[SAM] Used /segment_dicom on port ${port} (model: ${dicomData.model ?? 'unknown'})`);
+                  break; // success, stop trying
+                }
+              }
+            } catch { /* port not available, try next */ }
+          }
+        }
 
-        const resp = await fetch(`http://localhost:8000${route}`, {
-          method: 'POST',
-          body: formData,
-        });
+        // ── 优先路径 2（截图）：LiteMedSAM → MedSAM 降级 ──
+        if (!rleData) {
+          const routeMap: Record<'points' | 'rectangle' | 'mask', string> = {
+            points: '/points',
+            rectangle: '/segment',
+            mask: '/mask',
+          };
+          const route = routeMap[promptType];
 
-        const data = await resp.json();
-        samImageUrl = IMAGE_URL_PREFIX + data.image_url;
-        if (data.rle) rleData = data.rle;
+          const screenshotPorts = useLite ? [8002, 8000] : [8000];
+          for (const port of screenshotPorts) {
+            try {
+              const resp = await fetch(`http://localhost:${port}${route}`, {
+                method: 'POST',
+                body: formData,
+              });
+              if (!resp.ok) continue;
+              const data = await resp.json();
+              if (data.success) {
+                if (data.image_url) samImageUrl = `http://localhost:${port}${data.image_url}`;
+                if (data.rle) rleData = data.rle;
+                console.log(`[SAM] Screenshot path used port ${port} (model: ${data.model ?? 'unknown'})`);
+                break;
+              }
+            } catch { /* try next port */ }
+          }
+        }
       } catch (e) {
         console.error(e);
         uiNotificationService.show({
@@ -1284,7 +1350,7 @@ function commandsModule({
       // Statistics: Select LIVER → Render completed
       let t_prompt_selected: number | null = null;
 
-      const organ = await new Promise<'liver' | 'spleen' | 'kidney' | 'lung_l' | 'lung_r' | '__tumor__' | null>(resolve => {
+      const organ = await new Promise<'liver' | 'spleen' | 'kidney' | 'lung_l' | 'lung_r' | '__tumor__' | '__sam2_3d__' | null>(resolve => {
         if (!uiModalService) return resolve(null);
 
         const organs = [
@@ -1329,6 +1395,21 @@ function commandsModule({
                 },
                 '→ 我已框选病灶，立即分割'
               )
+            ),
+            React.createElement('hr', { style: { borderColor: '#2a4a2a', margin: '12px 0' } }),
+            React.createElement(
+              'div',
+              { style: { background: '#0d2b1a', borderRadius: 6, padding: '10px 14px', fontSize: 13, lineHeight: 1.6 } },
+              React.createElement('div', { style: { fontWeight: 'bold', marginBottom: 4, color: '#6ee' } }, '🧊 3D 全序列追踪 (SAM-2)'),
+              React.createElement('div', { style: { color: '#9ca', marginBottom: 8 } }, '先用 Rectangle 工具在任意切片框选目标，AI 将自动向前后追踪并生成完整 3D 分割。需先启动 medsam2_service.py (port 8003)。'),
+              React.createElement(
+                'button',
+                {
+                  onClick: () => { resolve('__sam2_3d__' as any); uiModalService.hide(modalId); },
+                  className: 'bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-1 px-4 rounded text-sm',
+                },
+                '→ 启动 3D 全序列追踪'
+              )
             )
           );
         };
@@ -1346,6 +1427,12 @@ function commandsModule({
       // 肿瘤模式：直接触发 SAMApply 流程（使用已画的 RectangleROI）
       if (organ === '__tumor__') {
         commandsManager.runCommand('showSAMUploadModal');
+        return;
+      }
+
+      // 3D SAM-2 全序列追踪
+      if ((organ as string) === '__sam2_3d__') {
+        await actions.segment3DSAM2();
         return;
       }
 
@@ -1419,6 +1506,197 @@ function commandsModule({
     },
 
     // ─── 预加载当前系列所有切片的 SAM Embedding 到后端缓存 ──────────────────
+    // ─── P2: MedSAM-2 3D 全序列追踪 ────────────────────────────────────────────
+    segment3DSAM2: async () => {
+      const { activeViewportId } = viewportGridService.getState();
+      const csViewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
+      const { uiModalService } = servicesManager.services;
+
+      if (!csViewport) {
+        uiNotificationService.show({ title: '3D SAM2', message: 'No active viewport', type: 'error' });
+        return;
+      }
+
+      // 1. Get SeriesInstanceUID from displaySet
+      const { viewports: _vps } = viewportGridService.getState();
+      const _vpEntry = _vps.get(activeViewportId);
+      const _dsUID = _vpEntry?.displaySetInstanceUIDs?.[0];
+      const _ds = _dsUID ? displaySetService.getDisplaySetByUID(_dsUID) : null;
+      const seriesInstanceUID = (_ds as any)?.SeriesInstanceUID;
+      if (!seriesInstanceUID) {
+        uiNotificationService.show({ title: '3D SAM2', message: 'Cannot find SeriesInstanceUID — load DICOM from Orthanc', type: 'error' });
+        return;
+      }
+
+      // 2. Current slice index
+      let keySliceIdx = 0;
+      let imageIds3d: string[] = [];
+      try {
+        imageIds3d = (csViewport as any).getImageIds?.() ?? [];
+        const curId = (csViewport as any).getCurrentImageId?.();
+        const idx = imageIds3d.indexOf(curId);
+        if (idx >= 0) keySliceIdx = idx;
+      } catch { /* ignore */ }
+
+      // 3. Extract bbox from the most recent RectangleROI annotation
+      let bboxCoords: [number, number, number, number] | null = null;
+      try {
+        const imgW = (csViewport as any).getImageData?.()?.dimensions?.[0] ?? 512;
+        const imgH = (csViewport as any).getImageData?.()?.dimensions?.[1] ?? 512;
+        const divEl3d = document.querySelector(`div[data-viewport-uid="${activeViewportId}"]`) as HTMLElement;
+        const canvasEl3d = divEl3d?.querySelector('canvas');
+        const canvasW3d = canvasEl3d?.width ?? imgW;
+        const canvasH3d = canvasEl3d?.height ?? imgH;
+        const scX = imgW / canvasW3d;
+        const scY = imgH / canvasH3d;
+        const allAnns = annotation.state.getAllAnnotations();
+        const rectAnns = allAnns.filter(a =>
+          (a.metadata?.toolName === 'RectangleROI' || a.metadata?.toolName === 'Rectangle') &&
+          a.data?.handles?.points?.length >= 4
+        );
+        if (rectAnns.length > 0) {
+          const ann3d = rectAnns[rectAnns.length - 1];
+          const csEl3d = getEnabledElement(divEl3d);
+          if (csEl3d?.viewport) {
+            const ccArr = ann3d.data.handles.points.map((pt: any) => csEl3d.viewport.worldToCanvas(pt));
+            const xxs = ccArr.map((c: any) => c[0]);
+            const yys = ccArr.map((c: any) => c[1]);
+            const bx1 = Math.round(Math.min(...xxs) * scX);
+            const by1 = Math.round(Math.min(...yys) * scY);
+            const bx2 = Math.round(Math.max(...xxs) * scX);
+            const by2 = Math.round(Math.max(...yys) * scY);
+            if (bx2 > bx1 && by2 > by1) bboxCoords = [bx1, by1, bx2, by2];
+          }
+        }
+      } catch (e) { console.warn('[3D SAM2] bbox extraction error:', e); }
+
+      if (!bboxCoords) {
+        uiNotificationService.show({
+          title: '3D SAM2',
+          message: 'Please draw a Rectangle on the target first, then start 3D tracking',
+          type: 'warning',
+        });
+        return;
+      }
+
+      // 4. Loading modal
+      let loadingId3d: any = null;
+      const showLoad3d = (msg: string, sub?: string) => {
+        if (loadingId3d && uiModalService) uiModalService.hide(loadingId3d);
+        if (uiModalService) {
+          loadingId3d = uiModalService.show({
+            title: '',
+            content: () => React.createElement('div',
+              { style: { padding: 32, textAlign: 'center', color: '#fff', minWidth: 320 } },
+              React.createElement('div', { style: { fontSize: 16, marginBottom: 8 } }, msg),
+              sub ? React.createElement('div', { style: { fontSize: 12, color: '#aaa' } }, sub) : null
+            ),
+            containerClassName: 'min-w-[320px] p-4',
+          });
+        }
+      };
+
+      let sessionId3d: string | null = null;
+      try {
+        // 5. Create SAM2 session (downloads all slices from Orthanc, ~30-60s)
+        showLoad3d('Loading CT series...', `${imageIds3d.length} slices — please wait 30-60s`);
+        const createResp = await fetch('http://localhost:8003/session/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ series_instance_uid: seriesInstanceUID }),
+        });
+        if (!createResp.ok) throw new Error(`Session create HTTP ${createResp.status}: ${await createResp.text()}`);
+        const createData = await createResp.json();
+        if (!createData.success) throw new Error(createData.detail ?? 'Session creation failed');
+        sessionId3d = createData.session_id;
+
+        // 6. Run 3D propagation
+        showLoad3d('SAM-2 3D tracking...', `Propagating from slice ${keySliceIdx + 1} to all ${createData.slice_count} slices`);
+        const segResp = await fetch(`http://localhost:8003/session/${sessionId3d}/segment`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key_slice_idx: keySliceIdx, bbox: bboxCoords }),
+        });
+        if (!segResp.ok) throw new Error(`Segment HTTP ${segResp.status}`);
+        const segData = await segResp.json();
+        if (!segData.success) throw new Error(segData.detail ?? '3D segmentation failed');
+
+        if (loadingId3d && uiModalService) uiModalService.hide(loadingId3d);
+        loadingId3d = null;
+
+        // 7. Write all slice masks into the labelmap volume
+        const { segmentationId: segId3d, segmentIndex: segIdx3d } = await _ensureActiveSegmentation();
+        const { cache: csCache3d } = await import('@cornerstonejs/core');
+        const { segmentation: csSeg3d } = await import('@cornerstonejs/tools');
+        const segObj3d = csSeg3d.state.getSegmentation(segId3d);
+        const lmData3d = segObj3d?.representationData?.[Enums.SegmentationRepresentations.Labelmap];
+        const lmVolume3d = lmData3d?.volumeId ? csCache3d.getVolume(lmData3d.volumeId) : null;
+
+        let slicesWritten3d = 0;
+        if (lmVolume3d) {
+          const { dimensions: dims3d } = lmVolume3d;
+          const [cols3d, rows3d] = dims3d;
+          const scalarData3d = lmVolume3d.getScalarData() as Uint8Array;
+
+          for (const { slice_idx, rle } of segData.masks_per_slice) {
+            const { counts: rleCts, starts_with: sv3d, width: rleW3d, height: rleH3d } = rle;
+            const total3d = rleW3d * rleH3d;
+            const mf3d = new Uint8Array(total3d);
+            let fi3d = 0, cv3d = sv3d;
+            for (const cnt of rleCts) {
+              if (cv3d === 1) mf3d.fill(1, fi3d, fi3d + cnt);
+              fi3d += cnt; cv3d = cv3d === 0 ? 1 : 0;
+            }
+            const sliceOff3d = slice_idx * cols3d * rows3d;
+            if (rleW3d === cols3d && rleH3d === rows3d) {
+              for (let i = 0; i < total3d; i++) {
+                if (mf3d[i] > 0) scalarData3d[sliceOff3d + i] = segIdx3d;
+              }
+            } else {
+              const sX3d = rleW3d / cols3d, sY3d = rleH3d / rows3d;
+              for (let r3d = 0; r3d < rows3d; r3d++) {
+                for (let c3d = 0; c3d < cols3d; c3d++) {
+                  const sx = Math.min(Math.round(c3d * sX3d), rleW3d - 1);
+                  const sy = Math.min(Math.round(r3d * sY3d), rleH3d - 1);
+                  if (mf3d[sy * rleW3d + sx] > 0) scalarData3d[sliceOff3d + r3d * cols3d + c3d] = segIdx3d;
+                }
+              }
+            }
+            slicesWritten3d++;
+          }
+
+          csSeg3d.triggerSegmentationModified(segId3d);
+          uiNotificationService.show({
+            title: '3D SAM-2 Done',
+            message: `Tracked ${slicesWritten3d} slices — volume: ${segData.volume_mm3?.toFixed(2) ?? '?'} mm³`,
+            type: 'success',
+            duration: 7000,
+          });
+          setTimeout(() => {
+            try { commandsManager.runCommand('setHangingProtocol', { protocolId: 'main3D', stageIndex: 0 }); }
+            catch { /* best effort */ }
+          }, 600);
+        } else {
+          uiNotificationService.show({
+            title: '3D SAM2 Done',
+            message: `Tracked ${segData.total_slices_segmented} slices, volume: ${segData.volume_mm3?.toFixed(2)} mm³ (no labelmap to write to — create a segmentation first)`,
+            type: 'warning',
+          });
+        }
+      } catch (e: any) {
+        if (loadingId3d && uiModalService) uiModalService.hide(loadingId3d);
+        const msg3d = String(e?.message ?? e);
+        if (msg3d.includes('ERR_CONNECTION_REFUSED') || msg3d.toLowerCase().includes('failed to fetch') || msg3d.includes('fetch')) {
+          uiNotificationService.show({ title: '3D SAM2 not connected', message: 'Start: python MedSAM2/medsam2_service.py  (port 8003)', type: 'error', duration: 9000 });
+        } else {
+          uiNotificationService.show({ title: '3D SAM2 Error', message: msg3d, type: 'error' });
+        }
+        console.error('[segment3DSAM2]', e);
+      } finally {
+        if (sessionId3d) fetch(`http://localhost:8003/session/${sessionId3d}`, { method: 'DELETE' }).catch(() => {});
+      }
+    },
+
     preloadSAMEmbeddings: async () => {
       const { activeViewportId } = viewportGridService.getState();
       const { uiModalService } = servicesManager.services;
