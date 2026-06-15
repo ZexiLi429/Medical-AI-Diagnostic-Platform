@@ -1,0 +1,9 @@
+{
+  "Cancel": "$t(Buttons:Cancel)",
+  "No hotkeys found": "لا توجد اختصارات معينة لهذا التطبيق. يمكن تكوين الاختصارات في ملف app-config.js الخاص بالتطبيق.",
+  "Reset to defaults": "$t(Buttons:Reset to defaults)",
+  "ResetDefaultMessage": "تمت إعادة التفضيلات إلى الإعدادات الافتراضية بنجاح. <br /> يجب عليك النقر على <strong>حفظ</strong> لتنفيذ هذا الإجراء.",
+  "Save": "$t(Buttons:Save)",
+  "SaveMessage": "تم حفظ التفضيلات",
+  "User preferences": "تفضيلات المستخدم"
+}
