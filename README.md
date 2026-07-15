@@ -1,289 +1,192 @@
-# Medical AI Diagnostic Platform
+<p align="center">
+  <img src="https://img.shields.io/badge/MedSAM-AI_Segmentation-2563eb?style=for-the-badge&logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/OHIF-3D_Viewer-059669?style=for-the-badge&logo=threedotjs&logoColor=white" />
+  <img src="https://img.shields.io/badge/Groq-Llama_3.3_70B-f97316?style=for-the-badge&logo=openai&logoColor=white" />
+  <img src="https://img.shields.io/badge/FastAPI-Backend-009485?style=for-the-badge&logo=fastapi&logoColor=white" />
+</p>
 
-<div align="center">
+<h1 align="center">MISCADA — Medical AI Diagnostic Platform</h1>
 
-![MedSAM](https://img.shields.io/badge/MedSAM-AI%20Segmentation-blue)
-![OHIF](https://img.shields.io/badge/OHIF-3D%20Viewer-green)
-![LLM](https://img.shields.io/badge/LLM-Diagnostic%20AI-orange)
-![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-
-**医学影像AI辅助诊断系统**
-
-[English](#) | [中文文档](#项目简介)
-
-</div>
-
----
-
-## 🌟 项目简介
-
-**Medical AI Diagnostic Platform (MISCADA)** 是一个集成了人工智能医学影像分割、3D体积渲染和大语言模型诊断辅助的综合性医疗影像平台。
-
-### 核心功能
-
-- 🎨 **3D医学影像查看器** - 基于OHIF Viewer 3.x，支持实时浏览器端3D渲染
-- 🤖 **AI智能分割** - 集成MedSAM模型，支持器官、病灶的智能识别和分割
-- 🧠 **LLM诊断辅助** - 利用GPT-4/Claude 3生成结构化医学诊断报告
-- 📊 **多平面重建** - MPR视图（轴向/冠状/矢状）
-- 💾 **DICOM标准支持** - 完整的医学影像数据管理
+<p align="center">
+  <b>AI-powered CT segmentation · 3D volume rendering · Automated radiology reports</b><br/>
+  From brush stroke to diagnostic report — one seamless workflow
+</p>
 
 ---
 
-## 🚀 快速开始
+## 🎬 Demo
 
-### 前置要求
+<!-- TODO: Insert demo video link after recording -->
+<p align="center">
+  <i>🎥 Full workflow walkthrough — 2D segmentation → 3D tracking → AI report generation</i>
+</p>
 
-- Python 3.8+
-- Node.js 16+
-- 8GB+ RAM
-- （可选）NVIDIA GPU用于加速推理
+<p align="center">
+  <a href="#"><img src="https://img.shields.io/badge/▶_Watch_Demo-coming_soon-gray?style=for-the-badge" /></a>
+</p>
 
-### 安装步骤
+---
 
-#### 1. 克隆仓库
+## 🏗️ Architecture
+
+```mermaid
+graph TB
+    subgraph Browser["🖥️ OHIF Viewer :3000"]
+        UI[React + TypeScript]
+        CS[Cornerstone3D<br/>2D/3D Rendering]
+        VTK[vtk.js<br/>3D Mesh Overlay]
+    end
+
+    subgraph Backend["⚙️ AI Services"]
+        M2[MedSAM2 :8003<br/>3D Tracking + Report]
+        M1[MedSAM :8000<br/>2D Segmentation]
+        LM[LiteMedSAM :8002<br/>Fast 2D Backup]
+    end
+
+    subgraph Data["💾 Data Layer"]
+        ORTH[Orthanc PACS :8042<br/>DICOM Storage]
+        LLM[Groq Cloud API<br/>Llama 3.3 70B]
+    end
+
+    UI --> CS
+    CS --> VTK
+    UI -- "2D seg" --> M1
+    UI -- "2D seg" --> LM
+    UI -- "3D track + report" --> M2
+    M1 --> ORTH
+    M2 --> ORTH
+    M2 --> LLM
+```
+
+---
+
+## ✨ Key Features
+
+### 2D AI Segmentation
+- **Rectangle or brush prompt** — draw on any CT slice, SAM finds the lesion boundary
+- **DICOM-native** — backend reads directly from Orthanc PACS, no screenshot distortion
+- **Post-clip intersection** — SAM output intersected with brush area for precise lesion mask
+- **Screenshot capture** — save the segmented view for report embedding
+
+### 3D Volumetric Tracking
+- **MedSAM2 propagation** — single-slice prompt spreads to full 240-slice 3D mask
+- **Marching cubes mesh** — automatic 3D surface reconstruction from voxel masks
+- **DICOM coordinate alignment** — vertices in patient LPS coordinates, auto-aligned with CT volume via `ImagePositionPatient` + `ImageOrientationPatient` + `PixelSpacing`
+- **Real-time progress** — polling endpoint tracks forward & reverse propagation
+
+### AI Radiology Report
+- **Groq Llama 3.3 70B** — clinical-grade English reports, free API
+- **Multi-agent pipeline** — Analyze → Evaluate → Report
+- **Clinical context input** — patient history, lab values, symptoms
+- **Auto organ detection** — DICOM metadata (`BodyPartExamined`, `SeriesDescription`)
+- **Professional PDF** — jsPDF native text + embedded 2D/3D images, A4 format
+
+### 3D Visualization
+- **vtk.js volume rendering** — interactive CT with semi-transparent green mesh overlay
+- **Zero manual alignment** — mesh auto-positioned via DICOM origin + direction matrix + z-shift
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+| Component | Requirement |
+|-----------|------------|
+| Python | 3.8+ |
+| Node.js | 16+ with `yarn` |
+| Orthanc | Running on `:8042` with DICOM loaded |
+| RAM | 8GB+ (16GB recommended) |
+| GPU | Optional — CPU inference supported |
+
+### 1. Start Backends
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Medical-AI-Diagnostic-Platform.git
-cd Medical-AI-Diagnostic-Platform
-```
-
-#### 2. 下载MedSAM模型
-
-下载预训练模型 `medsam_vit_b.pth` 到：
-```
-MedSAM-main/work_dir/MedSAM/medsam_vit_b.pth
-```
-
-模型下载链接: [Google Drive](https://drive.google.com/drive/folders/1ETWmi4AiniJeWOt6HAsYgTjYv_fkgzoN)
-
-#### 3. 安装Python依赖
-
-```bash
+# MedSAM 2D segmentation
 cd MedSAM-main
 pip install -r requirements_services.txt
+python medsam_service.py          # → :8000
+
+# MedSAM2 3D tracking + report
+cd ../MedSAM2
+python medsam2_service.py         # → :8003
 ```
 
-#### 4. 配置环境变量
+### 2. Start Frontend
 
 ```bash
-cp .env.example .env
-# 编辑 .env 文件，添加你的OpenAI或Anthropic API密钥
-```
-
-#### 5. 启动服务
-
-**Windows用户：**
-```bash
-双击运行: start_all.bat
-```
-
-**Linux/Mac用户：**
-```bash
-# 启动MedSAM分割服务
-cd MedSAM-main
-python medsam_service.py &
-
-# 启动LLM诊断服务
-python llm_diagnostic_service.py &
-
-# 启动前端
-cd ../miscada-project-master
+cd miscada-project-master
 yarn install
-yarn run dev:orthanc
+yarn start                         # → :3000
 ```
 
-#### 6. 访问应用
-
-- 🖥️ **OHIF前端**: http://localhost:3000
-- 🤖 **MedSAM API**: http://localhost:8000
-- 🧠 **LLM API**: http://localhost:8001
-- 💾 **Orthanc服务器**: http://localhost:8042
-
----
-
-## 📖 文档
-
-| 文档 | 描述 |
-|------|------|
-| [项目状态报告](./项目状态报告.md) | 已解决和待解决问题清单 |
-| [快速启动指南](./QUICK_START.md) | 3步快速启动教程 |
-| [部署指南](./DEPLOYMENT_GUIDE.md) | 完整部署说明 |
-| [前端集成](./FRONTEND_INTEGRATION.md) | 前端开发和集成教程 |
-| [MedSAM功能说明](./MEDSAM_功能说明.md) | AI分割功能详解 |
-| [后端修复说明](./MedSAM后端修复说明.md) | 接口修复和故障排查 |
-
----
-
-## 🏗️ 架构设计
+### 3. Open
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    用户浏览器                            │
-│              http://localhost:3000                      │
-└────────────────────┬────────────────────────────────────┘
-                     │
-         ┌───────────▼───────────┐
-         │   OHIF Viewer 3.x     │
-         │  (React + TypeScript) │
-         │  - 3D渲染              │
-         │  - MPR视图             │
-         │  - 工具栏              │
-         └───────────┬───────────┘
-                     │
-      ┌──────────────┼──────────────┐
-      │              │              │
-┌─────▼──────┐ ┌────▼─────┐ ┌─────▼──────┐
-│  Orthanc   │ │ MedSAM   │ │ LLM诊断    │
-│   DICOM    │ │   API    │ │   API      │
-│   Server   │ │ (FastAPI)│ │ (FastAPI)  │
-│   :8042    │ │  :8000   │ │   :8001    │
-└────────────┘ └──────────┘ └────────────┘
-                     │              │
-                ┌────▼──────┐  ┌───▼──────┐
-                │  MedSAM   │  │ GPT-4 /  │
-                │  Model    │  │ Claude 3 │
-                │ (PyTorch) │  │  (API)   │
-                └───────────┘  └──────────┘
+http://localhost:3000
+```
+
+### Workflow
+
+```
+Brush lesion → Auto Segment Organ → Apply MedSAM Model → Review 2D Preview
+  → Capture 2D Screenshot → Accept & Start 3D Tracking
+    → Capture 3D Screenshot → Generate AI Report
+      → Fill Organ + Clinical Context → Download PDF ✅
 ```
 
 ---
 
-## 🎯 主要功能
+## 🛠️ Tech Stack
 
-### 1. AI智能分割
-
-- **器官分割**: 肺、肝、心、肾、脑等
-- **病灶检测**: 肿瘤、结节、囊肿
-- **异常识别**: 肺炎、骨折、积液
-
-**支持的提示模式**:
-- 矩形框提示 (Rectangle prompt)
-- 点击提示 (Point prompt)
-- 掩码提示 (Mask prompt)
-- 自动分割模式
-
-### 2. 3D体积渲染
-
-- WebGL加速渲染
-- 实时交互操作
-- 窗宽窗位调整
-- 多平面重建（MPR）
-
-### 3. LLM诊断报告
-
-- 结构化医学报告生成
-- 多模态输入分析
-- 临床数据整合
-- 诊断建议和解释
+| Layer | Technology |
+|-------|-----------|
+| **Frontend** | React 18, TypeScript, OHIF Viewer 3.x, Cornerstone3D, vtk.js |
+| **2D AI** | MedSAM (ViT-B), LiteMedSAM, FastAPI, PyTorch |
+| **3D AI** | MedSAM2 (SAM2 Video Predictor), NumPy, OpenCV, scikit-image |
+| **Report LLM** | Groq API, Llama 3.3 70B Versatile |
+| **PDF** | jsPDF — native text layout with embedded images |
+| **PACS** | Orthanc DICOM Server |
+| **Coordination** | DICOM IPP + IOP + PixelSpacing — same coordinate system across all layers |
 
 ---
 
-## 🛠️ 技术栈
+## 📂 Project Structure
 
-### 前端
-- **框架**: React 18 + TypeScript
-- **医学影像**: OHIF Viewer 3.x, Cornerstone3D
-- **3D渲染**: WebGL, VTK.js
-- **UI**: React UI Components
+```
+miscada-project-master/extensions/cornerstone/src/
+  commandsModule.ts              ← Core logic: 2D SAM, 3D mesh, report flow
+  components/
+    ReportModal.tsx              ← AI report display + PDF generation
+    Segmentation3DMeshModal.tsx
 
-### 后端
-- **框架**: FastAPI + Uvicorn
-- **AI模型**: MedSAM (ViT-B), PyTorch
-- **LLM**: OpenAI GPT-4, Anthropic Claude 3
-- **图像处理**: OpenCV, Pillow, NumPy
+MedSAM-main/
+  medsam_service.py              ← 2D segmentation (:8000)
 
-### 数据服务
-- **DICOM服务器**: Orthanc
-- **协议**: DICOM Web, DICOMweb
-- **存储**: 本地文件系统/云存储
+MedSAM2/
+  medsam2_service.py             ← 3D tracking + report (:8003)
+  analyze_agent.py               ← Lesion metrics (volume, area, sphericity)
+  evaluate_agent.py              ← 6 validation checks
+  report_agent.py                ← Groq LLM report generation
 
----
-
-## 📊 项目状态
-
-### 已完成 ✅
-
-- [x] 3D体积渲染Web框架
-- [x] MedSAM分割API集成
-- [x] LLM诊断报告生成
-- [x] 前后端接口对接
-- [x] 一键启动脚本
-- [x] 完整文档
-
-### 进行中 🔄
-
-- [ ] 设备性能自适应
-- [ ] SAM 3D可视化
-- [ ] Docker容器化部署
-- [ ] 测试数据集
-
-### 计划中 📋
-
-- [ ] 用户认证系统
-- [ ] 多语言支持
-- [ ] HIS/PACS系统集成
-- [ ] 移动端适配
-
-详见 [项目状态报告](./项目状态报告.md)
+MedSAM-LiteMedSAM/
+  lite_medsam_service.py         ← Fast 2D fallback (:8002)
+```
 
 ---
 
-## 🤝 贡献指南
+## 📖 Docs
 
-我们欢迎各种形式的贡献！
-
-### 如何贡献
-
-1. Fork 本仓库
-2. 创建功能分支: `git checkout -b feature/amazing-feature`
-3. 提交更改: `git commit -m 'Add amazing feature'`
-4. 推送到分支: `git push origin feature/amazing-feature`
-5. 提交Pull Request
-
-### 开发规范
-
-- 遵循代码风格指南
-- 添加适当的注释和文档
-- 编写单元测试
-- 更新相关文档
+| Document | Topic |
+|----------|-------|
+| [代码流程详解](./代码流程和功能详解.md) | Full code walkthrough |
+| [技术报告](./技术报告_当前实现与验证状态.md) | Implementation & validation |
+| [前后端诊断指南](./前后端连接诊断和修复指南.md) | Debugging |
+| [部署指南](./DEPLOYMENT_GUIDE.md) | Deployment |
+| [快速开始](./QUICK_START.md) | 3-step quick start |
 
 ---
 
-## 📝 许可证
-
-本项目遵循 **Apache License 2.0** 许可证。
-
-MedSAM模型遵循其原始许可证。详见 [LICENSE](./LICENSE) 文件。
-
----
-
-## 🙏 致谢
-
-本项目基于以下优秀的开源项目：
-
-- [OHIF Viewer](https://github.com/OHIF/Viewers) - 医学影像查看器
-- [MedSAM](https://github.com/bowang-lab/MedSAM) - 医学影像分割模型
-- [Cornerstone3D](https://github.com/cornerstonejs/cornerstone3D) - 医学影像渲染引擎
-- [Orthanc](https://www.orthanc-server.com/) - DICOM服务器
-
----
-
-## 📞 联系方式
-
-- 📧 Email: [待补充]
-- 💬 Issues: [GitHub Issues](https://github.com/YOUR_USERNAME/Medical-AI-Diagnostic-Platform/issues)
-- 📖 文档: [项目Wiki](https://github.com/YOUR_USERNAME/Medical-AI-Diagnostic-Platform/wiki)
-
----
-
-## ⭐ Star History
-
-如果这个项目对你有帮助，请给我们一个Star！⭐
-
----
-
-<div align="center">
-
-**Made with ❤️ for Medical Imaging Community**
-
-</div>
+<p align="center">
+  <sub>Apache 2.0 · Built for medical AI research</sub>
+</p>
