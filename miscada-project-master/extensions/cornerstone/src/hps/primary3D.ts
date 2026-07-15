@@ -23,7 +23,7 @@ export const primary3D = {
               value: true,
             },
           },
-          required: true,
+          required: false,  // SAM 模式下 displaySet 可能没有此属性
         },
       ],
     },
@@ -80,9 +80,9 @@ export const primary3D = {
               id: 'activeDisplaySet',
               options: {
                 displayPreset: {
-                  CT: 'CT-Bone',
+                  CT: 'CT-Chest-Contrast-Enhanced',
                   MR: 'MR-Default',
-                  default: 'CT-Bone',
+                  default: 'CT-Chest-Contrast-Enhanced',
                 },
               },
             },

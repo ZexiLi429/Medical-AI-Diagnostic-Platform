@@ -23,7 +23,7 @@ export const only3D = {
               value: true,
             },
           },
-          required: true,
+          required: false,  // SAM 模式下 displaySet 可能没有此属性
         },
       ],
     },
@@ -43,7 +43,7 @@ export const only3D = {
         {
           viewportOptions: {
             toolGroupId: 'volume3d',
-            viewportType: 'volume3d',
+            viewportType: 'volume3d',  // 保持 volume3d 以保留彩色体渲染
             orientation: 'coronal',
             customViewportProps: {
               hideOverlays: true,
@@ -55,9 +55,9 @@ export const only3D = {
               id: 'activeDisplaySet',
               options: {
                 displayPreset: {
-                  CT: 'CT-Bone',
+                  CT: 'CT-Chest-Contrast-Enhanced',
                   MR: 'MR-Default',
-                  default: 'CT-Bone',
+                  default: 'CT-Chest-Contrast-Enhanced',
                 },
               },
             },

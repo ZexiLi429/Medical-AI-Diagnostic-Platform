@@ -1192,7 +1192,20 @@ class SegmentationService extends PubSubService {
 
     viewportIds.forEach(viewportId => {
       const { viewport } = getEnabledElementByViewportId(viewportId);
-      viewport.jumpToWorld(world);
+      // 防御性检查：Stack viewport 可能没有 jumpToWorld 方法
+      if (typeof (viewport as any).jumpToWorld === 'function') {
+        (viewport as any).jumpToWorld(world);
+      } else if (typeof (viewport as any).setCamera === 'function') {
+        (viewport as any).setCamera({ focalPoint: world });
+      } else if (typeof (viewport as any).scrollToIndex === 'function') {
+        // Stack viewport fallback: 使用当前 slice 对应的 world 坐标
+        try {
+          const imageData = (viewport as any).getImageData?.();
+          if (imageData) {
+            (viewport as any).jumpToWorld?.(world);
+          }
+        } catch { /* ignore */ }
+      }
 
       highlightSegment &&
         this.highlightSegment(
@@ -1331,7 +1344,9 @@ class SegmentationService extends PubSubService {
 
   private async handleVolumeViewportCase(csViewport, segmentation, isVolumeSegmentation) {
     if (csViewport.type === ViewportType.VOLUME_3D) {
-      return { representationTypeToUse: SegmentationRepresentations.Surface, isConverted: false };
+      // Surface generation can fail on partially-hydrated labelmaps and crash rendering.
+      // Keep the pipeline stable by using labelmap representation in VOLUME_3D as well.
+      return { representationTypeToUse: SegmentationRepresentations.Labelmap, isConverted: false };
     } else {
       await this.handleVolumeViewport(
         csViewport as csTypes.IVolumeViewport,
@@ -1378,29 +1393,60 @@ class SegmentationService extends PubSubService {
       blendMode?: csEnums.BlendModes;
     }
   ): Promise<void> {
-    const representation = {
-      type: representationType,
-      segmentationId,
-      config: { colorLUTOrIndex: colorLUTIndex, ...config },
+    const addRepresentation = async (typeToUse: csToolsEnums.SegmentationRepresentations) => {
+      const representation = {
+        type: typeToUse,
+        segmentationId,
+        config: { colorLUTOrIndex: colorLUTIndex, ...config },
+      };
+
+      await cstSegmentation.addSegmentationRepresentations(viewportId, [representation]);
     };
 
-    const addRepresentation = () =>
-      cstSegmentation.addSegmentationRepresentations(viewportId, [representation]);
+    const addWithFallback = async () => {
+      try {
+        await addRepresentation(representationType);
+      } catch (error) {
+        if (representationType !== SegmentationRepresentations.Surface) {
+          throw error;
+        }
+
+        console.warn(
+          `[SegmentationService] Surface representation failed on viewport ${viewportId}; fallback to labelmap`,
+          error
+        );
+
+        try {
+          cstSegmentation.removeSegmentationRepresentations(viewportId, {
+            segmentationId,
+            type: SegmentationRepresentations.Surface,
+          });
+        } catch {
+          // best effort cleanup only
+        }
+
+        await addRepresentation(SegmentationRepresentations.Labelmap);
+      }
+    };
 
     if (isConverted) {
       const { viewportGridService } = this.servicesManager.services;
       await new Promise<void>(resolve => {
         const { unsubscribe } = viewportGridService.subscribe(
           viewportGridService.EVENTS.GRID_STATE_CHANGED,
-          () => {
-            addRepresentation();
+          async () => {
+            try {
+              await addWithFallback();
+            } catch (error) {
+              console.error('[SegmentationService] Failed to add segmentation representation', error);
+            }
             unsubscribe();
             resolve();
           }
         );
       });
     } else {
-      addRepresentation();
+      await addWithFallback();
     }
   }
   private async handleVolumeViewport(
@@ -1745,7 +1791,28 @@ class SegmentationService extends PubSubService {
   };
 
   private _setActiveSegment(segmentationId: string, segmentIndex: number) {
-    cstSegmentation.segmentIndex.setActiveSegmentIndex(segmentationId, segmentIndex);
+    if (typeof segmentIndex !== 'number' || Number.isNaN(segmentIndex)) {
+      return;
+    }
+
+    const segmentation = this.getSegmentation(segmentationId);
+    const segment = segmentation?.segments?.[segmentIndex];
+
+    if (!segmentation || !segment || typeof segment.segmentIndex !== 'number') {
+      return;
+    }
+
+    try {
+      // 检查 segmentation 是否已在 cstSegmentation 状态中注册
+      const segState = cstSegmentation.state?.getSegmentation?.(segmentationId);
+      if (!segState) {
+        // segmentation 尚未完全初始化，静默跳过（后续渲染会自动激活）
+        return;
+      }
+      cstSegmentation.segmentIndex.setActiveSegmentIndex(segmentationId, segmentIndex);
+    } catch (error) {
+      // 静默处理：分割数据已写入 labelmap，激活失败不影响渲染
+    }
   }
 
   private _getVolumeIdForDisplaySet(displaySet) {

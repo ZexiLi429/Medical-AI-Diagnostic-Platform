@@ -68,6 +68,8 @@ export default async function init({
     ...cornerstone.getConfiguration(),
     rendering: {
       ...cornerstone.getConfiguration().rendering,
+      renderingEngineMode: 'tiled',
+      webGlContextCount: 1,
       strictZSpacingForVolumeViewport: appConfig.strictZSpacingForVolumeViewport,
     },
   });

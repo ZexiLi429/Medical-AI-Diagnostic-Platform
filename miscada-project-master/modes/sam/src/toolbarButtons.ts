@@ -409,9 +409,6 @@ const toolbarButtons: Button[] = [
           name: 'evaluate.viewport.supported',
           unsupportedViewportTypes: ['video', 'wholeSlide'],
         },
-        {
-          name: 'evaluate.cornerstone.segmentation',
-        },
       ],
     },
   },
@@ -421,16 +418,13 @@ const toolbarButtons: Button[] = [
     props: {
       icon: 'sam',
       label: 'Apply MedSAM Model',
-      tooltip: 'Use Segmentation Image to MedSAM Model',
+      tooltip: 'STEP 3: Preview SAM segmentation on current slice. Workflow: Brush lesion → Auto → Preview',
       commands: 'showSAMUploadModal',
       evaluate: [
         'evaluate.action',
         {
           name: 'evaluate.viewport.supported',
           unsupportedViewportTypes: ['video', 'wholeSlide'],
-        },
-        {
-          name: 'evaluate.cornerstone.segmentation',
         },
       ],
     },
@@ -441,16 +435,13 @@ const toolbarButtons: Button[] = [
     props: {
       icon: 'auto-segment-liver',
       label: 'Auto Segment Organ',
-      tooltip: 'Select organs for MedSAM Model to segment automatically',
+      tooltip: 'STEP 2: Auto-detect organ from brush area to improve segmentation accuracy',
       commands: 'autoSegmentLiver',
       evaluate: [
         'evaluate.action',
         {
           name: 'evaluate.viewport.supported',
           unsupportedViewportTypes: ['video', 'wholeSlide'],
-        },
-        {
-          name: 'evaluate.cornerstone.segmentation',
         },
       ],
     },
@@ -459,9 +450,9 @@ const toolbarButtons: Button[] = [
     id: 'GenerateAIReport',
     uiType: 'ohif.toolBoxButton',
     props: {
-      icon: 'icon-document',
+      icon: 'clipboard',
       label: 'Generate AI Report',
-      tooltip: 'Generate a radiology report using medical AI based on current segmentation',
+      tooltip: 'Click here to generate your AI radiology report (after 3D tracking is complete)',
       commands: 'generateAIReport',
       evaluate: [
         'evaluate.action',
@@ -476,7 +467,7 @@ const toolbarButtons: Button[] = [
     id: 'PreloadSAMEmbeddings',
     uiType: 'ohif.toolBoxButton',
     props: {
-      icon: 'icon-transfer',
+      icon: 'icon-transferring',
       label: 'Preload AI Cache',
       tooltip: '预计算当前系列所有切片的 AI Embedding，分割速度提升约 10x',
       commands: 'preloadSAMEmbeddings',

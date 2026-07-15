@@ -12,27 +12,7 @@ export const mprAnd3DVolumeViewport = {
   imageLoadStrategy: 'interleaveCenter',
   displaySetSelectors: {
     activeDisplaySet: {
-      seriesMatchingRules: [
-        {
-          weight: 1,
-          attribute: 'isReconstructable',
-          constraint: {
-            equals: {
-              value: true,
-            },
-          },
-          required: true,
-        },
-        {
-          attribute: 'Modality',
-          constraint: {
-            equals: {
-              value: 'CT',
-            },
-          },
-          required: true,
-        },
-      ],
+      seriesMatchingRules: [],
     },
   },
   stages: [
@@ -78,9 +58,9 @@ export const mprAnd3DVolumeViewport = {
               id: 'activeDisplaySet',
               options: {
                 displayPreset: {
-                  CT: 'CT-Bone',
+                  CT: 'CT-Chest-Contrast-Enhanced',
                   MR: 'MR-Default',
-                  default: 'CT-Bone',
+                  default: 'CT-Chest-Contrast-Enhanced',
                 },
               },
             },

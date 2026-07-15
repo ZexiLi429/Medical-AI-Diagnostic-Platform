@@ -15,17 +15,30 @@ export const handleSegmentChange = ({
 }) => {
   const segmentation = segmentationService.getSegmentation(segmentationId);
 
-  const { segments } = segmentation;
+  if (!segmentation?.segments) {
+    return;
+  }
 
-  const numberOfSegments = Object.keys(segments).length;
+  const { segments } = segmentation;
+  const validSegments = Object.values(segments).filter(
+    segment => segment && typeof segment.segmentIndex === 'number'
+  );
+  const numberOfSegments = validSegments.length;
+
+  if (!numberOfSegments) {
+    return;
+  }
 
   // Get activeSegment each time because the user can select any segment from the list and thus the index should be updated
   const activeSegment = segmentationService.getActiveSegment(viewportId);
   if (activeSegment) {
     // from the activeSegment get the actual object array index to be used
-    selectedSegmentObjectIndex = Object.values(segments).findIndex(
+    selectedSegmentObjectIndex = validSegments.findIndex(
       segment => segment.segmentIndex === activeSegment.segmentIndex
     );
+    if (selectedSegmentObjectIndex < 0) {
+      selectedSegmentObjectIndex = 0;
+    }
   }
   let newSelectedSegmentIndex = selectedSegmentObjectIndex + direction;
 
@@ -38,7 +51,11 @@ export const handleSegmentChange = ({
 
   // Convert segmentationId from object array index to property value of type Segment
   // Functions below use the segmentIndex object attribute so we have to do the conversion
-  const segmentIndex = Object.values(segments)[newSelectedSegmentIndex]?.segmentIndex;
+  const segmentIndex = validSegments[newSelectedSegmentIndex]?.segmentIndex;
+
+  if (typeof segmentIndex !== 'number') {
+    return;
+  }
 
   segmentationService.setActiveSegment(segmentationId, segmentIndex);
   segmentationService.jumpToSegmentCenter(segmentationId, segmentIndex, viewportId);

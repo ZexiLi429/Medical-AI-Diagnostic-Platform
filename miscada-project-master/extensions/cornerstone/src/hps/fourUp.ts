@@ -23,7 +23,7 @@ export const fourUp = {
               value: true,
             },
           },
-          required: true,
+          required: false,  // SAM 模式下 displaySet 可能没有此属性
         },
       ],
     },

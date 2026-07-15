@@ -75,8 +75,18 @@
     "link-list": "npm ls --depth=0 --link=true"
   },
   "dependencies": {
+    "@cornerstonejs/adapters": "3.32.2",
+    "@cornerstonejs/ai": "3.32.2",
+    "@cornerstonejs/core": "3.32.2",
+    "@cornerstonejs/labelmap-interpolation": "3.32.2",
+    "@cornerstonejs/polymorphic-segmentation": "3.32.2",
+    "@cornerstonejs/tools": "3.32.2",
+    "@kitware/vtk.js": "32.8.0",
     "date-fns": "^3.6.0",
-    "execa": "^8.0.1"
+    "execa": "^8.0.1",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
+    "three": "^0.160.0"
   },
   "optionalDependencies": {
     "@percy/cypress": "^3.1.1",
@@ -125,6 +135,13 @@
     ]
   },
   "resolutions": {
+    "@kitware/vtk.js": "32.8.0",
+    "@cornerstonejs/core": "3.32.2",
+    "@cornerstonejs/tools": "3.32.2",
+    "@cornerstonejs/adapters": "3.32.2",
+    "@cornerstonejs/ai": "3.32.2",
+    "@cornerstonejs/labelmap-interpolation": "3.32.2",
+    "@cornerstonejs/polymorphic-segmentation": "3.32.2",
     "commander": "8.3.0",
     "path-to-regexp": "0.1.12",
     "nth-check": "^2.1.1",
