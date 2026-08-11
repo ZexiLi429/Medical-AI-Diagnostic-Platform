@@ -1,192 +1,211 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/MedSAM-AI_Segmentation-2563eb?style=for-the-badge&logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/OHIF-3D_Viewer-059669?style=for-the-badge&logo=threedotjs&logoColor=white" />
-  <img src="https://img.shields.io/badge/Groq-Llama_3.3_70B-f97316?style=for-the-badge&logo=openai&logoColor=white" />
-  <img src="https://img.shields.io/badge/FastAPI-Backend-009485?style=for-the-badge&logo=fastapi&logoColor=white" />
-</p>
+# CT Analysis Platform — Multi-Agent Diagnostic System
 
-<h1 align="center">MISCADA — Medical AI Diagnostic Platform</h1>
+https://github.com/user-attachments/assets/demo.mp4
 
-<p align="center">
-  <b>AI-powered CT segmentation · 3D volume rendering · Automated radiology reports</b><br/>
-  From brush stroke to diagnostic report — one seamless workflow
-</p>
+> **Dissertation Project**: Computer-aided CT analysis platform integrating real-time 3D visualisation, multi-organ segmentation, box-guided lesion detection, and LLM-powered diagnostic report generation.
 
 ---
 
-## 🎬 Demo
+## Architecture
 
-<!-- TODO: Insert demo video link after recording -->
-<p align="center">
-  <i>🎥 Full workflow walkthrough — 2D segmentation → 3D tracking → AI report generation</i>
-</p>
-
-<p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/▶_Watch_Demo-coming_soon-gray?style=for-the-badge" /></a>
-</p>
-
----
-
-## 🏗️ Architecture
-
-```mermaid
-graph TB
-    subgraph Browser["🖥️ OHIF Viewer :3000"]
-        UI[React + TypeScript]
-        CS[Cornerstone3D<br/>2D/3D Rendering]
-        VTK[vtk.js<br/>3D Mesh Overlay]
-    end
-
-    subgraph Backend["⚙️ AI Services"]
-        M2[MedSAM2 :8003<br/>3D Tracking + Report]
-        M1[MedSAM :8000<br/>2D Segmentation]
-        LM[LiteMedSAM :8002<br/>Fast 2D Backup]
-    end
-
-    subgraph Data["💾 Data Layer"]
-        ORTH[Orthanc PACS :8042<br/>DICOM Storage]
-        LLM[Groq Cloud API<br/>Llama 3.3 70B]
-    end
-
-    UI --> CS
-    CS --> VTK
-    UI -- "2D seg" --> M1
-    UI -- "2D seg" --> LM
-    UI -- "3D track + report" --> M2
-    M1 --> ORTH
-    M2 --> ORTH
-    M2 --> LLM
+```
+┌─────────────────────────────────────────────────────┐
+│  OHIF/vtk.js Frontend (port 3000)                   │
+│  • 2D MPR viewer + 3D volume rendering              │
+│  • Semi-transparent organ meshes                    │
+│  • Box-select lesion ROI                            │
+├─────────────────────────────────────────────────────┤
+│  FastAPI Backend (port 8004)                        │
+│  • TotalSegmentator orchestration                   │
+│  • MedSAM2 interactive refinement                   │
+│  • Groq-hosted Llama 3.3 70B (report generation)    │
+│  • Dual-level caching (organ + lesion)              │
+├─────────────────────────────────────────────────────┤
+│  Docker Containers                                  │
+│  • TotalSegmentator v2 (117-class nnU-Net v2)       │
+│  • Orthanc PACS (port 8042)                         │
+│  • MedSAM2 (port 8003, interactive lesion seg)      │
+└─────────────────────────────────────────────────────┘
 ```
 
----
+## Features
 
-## ✨ Key Features
-
-### 2D AI Segmentation
-- **Rectangle or brush prompt** — draw on any CT slice, SAM finds the lesion boundary
-- **DICOM-native** — backend reads directly from Orthanc PACS, no screenshot distortion
-- **Post-clip intersection** — SAM output intersected with brush area for precise lesion mask
-- **Screenshot capture** — save the segmented view for report embedding
-
-### 3D Volumetric Tracking
-- **MedSAM2 propagation** — single-slice prompt spreads to full 240-slice 3D mask
-- **Marching cubes mesh** — automatic 3D surface reconstruction from voxel masks
-- **DICOM coordinate alignment** — vertices in patient LPS coordinates, auto-aligned with CT volume via `ImagePositionPatient` + `ImageOrientationPatient` + `PixelSpacing`
-- **Real-time progress** — polling endpoint tracks forward & reverse propagation
-
-### AI Radiology Report
-- **Groq Llama 3.3 70B** — clinical-grade English reports, free API
-- **Multi-agent pipeline** — Analyze → Evaluate → Report
-- **Clinical context input** — patient history, lab values, symptoms
-- **Auto organ detection** — DICOM metadata (`BodyPartExamined`, `SeriesDescription`)
-- **Professional PDF** — jsPDF native text + embedded 2D/3D images, A4 format
-
-### 3D Visualization
-- **vtk.js volume rendering** — interactive CT with semi-transparent green mesh overlay
-- **Zero manual alignment** — mesh auto-positioned via DICOM origin + direction matrix + z-shift
+| Feature | Description |
+|---------|-------------|
+| **Multi-organ Segmentation** | 117 anatomical structures via TotalSegmentator v2 |
+| **Semantic Organ Queries** | Natural-language organ lookup (e.g. `"left lung"`, `"rib"`) |
+| **Lesion Detection** | Box-guided: liver lesions, lung nodules, kidney cysts |
+| **3D Visualisation** | vtk.js volume rendering with organ mesh overlay |
+| **Diagnostic Reports** | Three-agent LLM workflow (Analysis → Evaluation → Generation) |
+| **CPU-only Operation** | Adaptive Z-axis downsampling, dual-level caching |
 
 ---
 
-## 🚀 Quick Start
+## Prerequisites
 
-### Prerequisites
+| Component | Version | Notes |
+|-----------|---------|-------|
+| **Python** | 3.10+ | Backend service |
+| **Docker** | 24.0+ | TotalSegmentator + Orthanc + MedSAM2 |
+| **Node.js** | 18+ | OHIF frontend |
+| **Groq API Key** | Free tier | For LLM report generation |
 
-| Component | Requirement |
-|-----------|------------|
-| Python | 3.8+ |
-| Node.js | 16+ with `yarn` |
-| Orthanc | Running on `:8042` with DICOM loaded |
-| RAM | 8GB+ (16GB recommended) |
-| GPU | Optional — CPU inference supported |
+---
 
-### 1. Start Backends
+## Docker Setup
+
+### 1. TotalSegmentator
 
 ```bash
-# MedSAM 2D segmentation
-cd MedSAM-main
-pip install -r requirements_services.txt
-python medsam_service.py          # → :8000
-
-# MedSAM2 3D tracking + report
-cd ../MedSAM2
-python medsam2_service.py         # → :8003
+docker pull wasserth/totalsegmentator:latest
 ```
 
-### 2. Start Frontend
+Uses `--network=host` mode. The backend auto-pulls the image on first use if not present.
+
+### 2. Orthanc PACS
+
+```bash
+docker run -d --name orthanc --network=host \
+  -v orthanc_data:/var/lib/orthanc/db \
+  jodogne/orthanc-plugins
+```
+
+Access at http://localhost:8042
+
+### 3. MedSAM2 (optional, for interactive lesion refinement)
+
+```bash
+docker run -d --name medsam2 --network=host \
+  -v ./MedSAM2:/workspace \
+  medsam2:latest
+```
+
+---
+
+## Quick Start
+
+### 1. Clone & Setup
+
+```bash
+git clone https://github.com/YOUR_USERNAME/CT-Analysis-Platform.git
+cd CT-Analysis-Platform
+
+# Create virtual environment
+python -m venv .venv
+.venv\Scripts\activate   # Windows
+# source .venv/bin/activate  # Linux/macOS
+
+pip install -r requirements.txt
+```
+
+### 2. Configuration
+
+```bash
+# Set Groq API key (free tier available at console.groq.com)
+set GROQ_API_KEY=gsk_your_key_here
+```
+
+No other configuration needed — all defaults are pre-set for local development.
+
+### 3. Start Docker Containers
+
+```bash
+# Orthanc PACS (required)
+docker run -d --name orthanc --network=host jodogne/orthanc-plugins
+
+# TotalSegmentator (auto-pulled by backend on first request)
+# No manual start needed — the backend issues docker run on-demand
+```
+
+### 4. Start Backend
+
+```bash
+python totalseg_service.py
+```
+
+Backend starts at **http://localhost:8004**. Verify:
+
+```bash
+curl http://localhost:8004/health
+# {"status": "ok"}
+```
+
+### 5. Start Frontend (OHIF)
 
 ```bash
 cd miscada-project-master
 yarn install
-yarn start                         # → :3000
+yarn start
 ```
 
-### 3. Open
+Frontend at **http://localhost:3000**
+
+### 6. Load DICOM Data
+
+Upload DICOM files to Orthanc (port 8042), then open the OHIF viewer. The platform auto-detects the study and triggers segmentation on first view.
+
+---
+
+## API Endpoints (port 8004)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/segment_3d` | Full 117-organ segmentation → 3D meshes |
+| `POST` | `/segment_by_name` | Query-specific organ (e.g. `"liver"`, `"left lung"`) |
+| `POST` | `/segment_file` | Segment a NIfTI file directly |
+| `POST` | `/segment_lesion` | Box-guided lesion detection (liver/lung/kidney) |
+| `POST` | `/analyze_lesions` | LLM analysis: which organs likely contain lesions |
+| `POST` | `/generate_report` | Full diagnostic report generation |
+| `GET` | `/health` | Health check |
+
+---
+
+## Key Results
+
+| Metric | Value | Context |
+|--------|-------|---------|
+| **Segmentation Time** | 1.3–5.8 min | 5 Orthanc cases, 400-slice limit |
+| **Kidney Dice** | 0.76 ± 0.14 | 5 KiTS19 NIfTI volumes, provenance-matched GT |
+| **Coordinate Alignment** | 0.00 mm origin delta | TS mesh vs DICOM world coords |
+| **Organ Classes** | 117 | TotalSegmentator v2 via Docker |
+| **Lesion Types** | 3 | Liver lesions, lung nodules, kidney cysts |
+
+Full experimental data: [`result/experiment_results/`](result/experiment_results/)
+
+---
+
+## Project Structure
 
 ```
-http://localhost:3000
-```
-
-### Workflow
-
-```
-Brush lesion → Auto Segment Organ → Apply MedSAM Model → Review 2D Preview
-  → Capture 2D Screenshot → Accept & Start 3D Tracking
-    → Capture 3D Screenshot → Generate AI Report
-      → Fill Organ + Clinical Context → Download PDF ✅
+├── totalseg_service.py      # Main backend (FastAPI, port 8004)
+├── service/                 # Deployed service copy
+├── test/                    # Experiment & evaluation scripts
+├── figures/                 # Thesis figure generation
+├── result/                  # Experimental results (JSON, CSV, NPY)
+├── data/                    # Dataset utilities
+├── legacy/                  # Deprecated debug scripts
+├── miscada-project-master/  # OHIF vtk.js frontend
+├── MedSAM2/                 # MedSAM2 inference + report agent
+├── MedSAM-LiteMedSAM/       # LiteMedSAM models
+├── MedSAM-main/             # MedSAM v1
+└── demo.mp4                 # Demo video
 ```
 
 ---
 
-## 🛠️ Tech Stack
+## Citation
 
-| Layer | Technology |
-|-------|-----------|
-| **Frontend** | React 18, TypeScript, OHIF Viewer 3.x, Cornerstone3D, vtk.js |
-| **2D AI** | MedSAM (ViT-B), LiteMedSAM, FastAPI, PyTorch |
-| **3D AI** | MedSAM2 (SAM2 Video Predictor), NumPy, OpenCV, scikit-image |
-| **Report LLM** | Groq API, Llama 3.3 70B Versatile |
-| **PDF** | jsPDF — native text layout with embedded images |
-| **PACS** | Orthanc DICOM Server |
-| **Coordination** | DICOM IPP + IOP + PixelSpacing — same coordinate system across all layers |
+If you use this work, please cite:
 
----
-
-## 📂 Project Structure
-
-```
-miscada-project-master/extensions/cornerstone/src/
-  commandsModule.ts              ← Core logic: 2D SAM, 3D mesh, report flow
-  components/
-    ReportModal.tsx              ← AI report display + PDF generation
-    Segmentation3DMeshModal.tsx
-
-MedSAM-main/
-  medsam_service.py              ← 2D segmentation (:8000)
-
-MedSAM2/
-  medsam2_service.py             ← 3D tracking + report (:8003)
-  analyze_agent.py               ← Lesion metrics (volume, area, sphericity)
-  evaluate_agent.py              ← 6 validation checks
-  report_agent.py                ← Groq LLM report generation
-
-MedSAM-LiteMedSAM/
-  lite_medsam_service.py         ← Fast 2D fallback (:8002)
+```bibtex
+@mastersthesis{miscada2025,
+  title  = {Computer-Aided CT Analysis Platform with Multi-Agent Diagnostic Report Generation},
+  author = {Your Name},
+  school = {Your University},
+  year   = {2025}
+}
 ```
 
----
+## License
 
-## 📖 Docs
-
-| Document | Topic |
-|----------|-------|
-| [代码流程详解](./代码流程和功能详解.md) | Full code walkthrough |
-| [技术报告](./技术报告_当前实现与验证状态.md) | Implementation & validation |
-| [前后端诊断指南](./前后端连接诊断和修复指南.md) | Debugging |
-| [部署指南](./DEPLOYMENT_GUIDE.md) | Deployment |
-| [快速开始](./QUICK_START.md) | 3-step quick start |
-
----
-
-<p align="center">
-  <sub>Apache 2.0 · Built for medical AI research</sub>
-</p>
+MIT
