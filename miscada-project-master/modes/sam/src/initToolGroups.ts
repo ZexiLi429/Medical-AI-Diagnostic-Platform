@@ -108,6 +108,7 @@ function createTools(utilityModule) {
       { toolName: toolNames.StackScroll },
       { toolName: toolNames.Magnify },
       { toolName: toolNames.WindowLevelRegion },
+      { toolName: toolNames.RectangleROI },
 
       { toolName: toolNames.UltrasoundDirectional },
     ],

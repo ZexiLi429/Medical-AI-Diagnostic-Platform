@@ -46,6 +46,7 @@ import html2canvas from 'html2canvas';
 
 import Segmentation3DMeshModal, { type MeshData } from './components/Segmentation3DMeshModal';
 import ReportModal from './components/ReportModal';
+import TotalSegReportModal, { type TotalSegReportData } from './components/TotalSegReportModal';
 
 // ── VTK.js for 3D mesh overlay on volume viewport ──
 import vtkPolyData from '@kitware/vtk.js/Common/DataModel/PolyData';
@@ -334,6 +335,49 @@ const segmentAI = new ONNXSegmentationController({
   modelName: 'sam_b',
 });
 let segmentAIEnabled = false;
+
+// ── TotalSegmentator 结果缓存（供报告生成使用）──
+let _lastTotalSegResult: {
+  meshes: any[];
+  organs: Array<{ name: string; volume_cm3: number; label: number }>;
+  lesions: Array<{ name: string; volume_cm3: number; label: number }>;
+  screenshot3DBase64: string;
+} | null = null;
+
+function capture3DScreenshot(servicesManager: any): string {
+  try {
+    // 方法1：从 vtk.js renderWindow 拿 canvas
+    const { cornerstoneViewportService, viewportGridService } = servicesManager.services;
+    const vpMap = viewportGridService.getState().viewports as Map<string, any>;
+    for (const [id, vp] of vpMap.entries()) {
+      if ((vp?.viewportOptions?.viewportType || '') === 'volume3d') {
+        const csVp = cornerstoneViewportService.getCornerstoneViewport(id) as any;
+        const renderer = csVp?.getRenderer?.();
+        if (renderer) {
+          const rw = renderer.getRenderWindow();
+          // vtk.js: RenderWindow 的 container 里找 canvas
+          const container = rw?.getContainer?.();
+          if (container) {
+            const canvas = container.querySelector('canvas');
+            if (canvas && canvas.width > 10) {
+              return canvas.toDataURL('image/png');
+            }
+          }
+        }
+      }
+    }
+    // 方法2：从 DOM 找 viewport 内的 canvas
+    const viewportEls = document.querySelectorAll('[data-viewport-uid]');
+    for (const el of Array.from(viewportEls)) {
+      const canvas = el.querySelector('canvas');
+      if (canvas && canvas.width > 10) {
+        return canvas.toDataURL('image/png');
+      }
+    }
+    console.warn('[TotalSeg] No canvas found for screenshot');
+  } catch(e) { console.warn('[TotalSeg] screenshot error:', e); }
+  return '';
+}
 
 function commandsModule({
   servicesManager,
@@ -804,6 +848,407 @@ function commandsModule({
     if (activeViewportId) {
       (cornerstoneViewportService.getCornerstoneViewport(activeViewportId) as any)?.render?.();
     }
+  }
+
+  // ── 临床表单弹窗 ──
+  function showClinicalFormModal(uiModalService: any, servicesMgr: any, autoScreenshot: string) {
+    const quickSymptoms = ['Abdominal pain','Weight loss','Jaundice','Fever','Nausea','Fatigue','Back pain','Hematuria','Cough','Chest pain','Loss of appetite','Night sweats'];
+    const quickQuestions = ['Liver cancer screening?','Rule out HCC recurrence','Evaluate known lesion','Rule out metastasis','Pre-surgical planning','Post-treatment follow-up','Incidental finding','Lung nodule follow-up'];
+    const quickHistory = ['Hepatitis B/C','Cirrhosis','Diabetes T2','Hypertension','Prior surgery','Smoking','Alcohol use','Family cancer history','Prior chemo/radiation','NAFLD/NASH'];
+
+    let age = 0, gender = '', complaint = '', question = '', history = '';
+    let currentScreenshot = autoScreenshot;
+
+    const buildHtml = () => {
+      const chipOn = 'display:inline-block;padding:4px 10px;margin:2px;border-radius:14px;font-size:11px;cursor:pointer;border:1px solid #2563eb;background:#eff6ff;color:#1d4ed8;transition:all 0.15s;font-weight:500';
+      const chipOff = 'display:inline-block;padding:4px 10px;margin:2px;border-radius:14px;font-size:11px;cursor:pointer;border:1px solid #d1d5db;background:#f9fafb;color:#6b7280;transition:all 0.15s';
+
+      return `
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#111827;background:#ffffff;border-radius:10px;overflow:hidden">
+  <!-- 标题栏 -->
+  <div style="background:#1e40af;padding:14px 20px;display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <div style="color:#ffffff;font-size:16px;font-weight:700">Generate Radiology Report</div>
+      <div style="color:rgba(255,255,255,0.75);font-size:11px;margin-top:2px">Fill clinical details to generate an AI-assisted diagnostic report</div>
+    </div>
+    <button id="btn-close-form" style="background:rgba(255,255,255,0.12);border:none;color:#ffffff;font-size:20px;cursor:pointer;width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;line-height:1;font-weight:300">&times;</button>
+  </div>
+
+  <div style="padding:18px 20px;max-height:62vh;overflow-y:auto;background:#ffffff">
+    <!-- 截图区 -->
+    <div style="margin-bottom:14px;border-radius:8px;overflow:hidden;border:1px solid #e5e7eb;background:#f9fafb">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 14px;background:#f3f4f6;border-bottom:1px solid #e5e7eb">
+        <span style="font-size:12px;font-weight:600;color:#374151">3D Screenshot</span>
+        <button id="recapture-btn" style="background:#2563eb;color:#fff;border:none;border-radius:5px;padding:4px 12px;font-size:11px;font-weight:600;cursor:pointer">Recapture</button>
+      </div>
+      <div id="screenshot-container" style="min-height:60px;display:flex;align-items:center;justify-content:center;background:#0f172a">
+        ${currentScreenshot
+          ? `<img src="${currentScreenshot}" style="width:100%;max-height:180px;object-fit:contain;display:block">`
+          : '<span style="color:#9ca3af;font-size:12px;padding:30px;text-align:center">No 3D screenshot yet.<br>Click Recapture to capture the current 3D view.</span>'}
+      </div>
+    </div>
+
+    <!-- 年龄 + 性别 -->
+    <div style="display:flex;gap:14px;margin-bottom:14px">
+      <div style="flex:1">
+        <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px">Age</label>
+        <input id="fld-age" type="number" value="${age||''}" placeholder="e.g. 65" style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;outline:none;box-sizing:border-box;background:#fff;color:#111827">
+      </div>
+      <div style="flex:1">
+        <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px">Gender</label>
+        <select id="fld-gender" style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;outline:none;background:#fff;box-sizing:border-box;color:#111827">
+          <option value="" ${!gender?'selected':''}>Select...</option>
+          <option value="Male" ${gender==='Male'?'selected':''}>Male</option>
+          <option value="Female" ${gender==='Female'?'selected':''}>Female</option>
+          <option value="Other" ${gender==='Other'?'selected':''}>Other</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 主诉 -->
+    <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px">Chief Complaint / Symptoms</label>
+    <div id="chips-symptoms" style="margin-bottom:6px;line-height:2">${quickSymptoms.map(s=>`<span class="chip-symp" data-val="${s}" style="${complaint.includes(s)?chipOn:chipOff}">${s}</span>`).join('')}</div>
+    <textarea id="fld-complaint" rows="2" placeholder="e.g. Right upper quadrant pain for 3 weeks, unintentional weight loss..." style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;outline:none;resize:vertical;box-sizing:border-box;margin-bottom:14px;font-family:inherit;color:#111827;background:#fff">${complaint}</textarea>
+
+    <!-- 临床问题 -->
+    <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px">Clinical Question</label>
+    <div id="chips-question" style="margin-bottom:6px;line-height:2">${quickQuestions.map(s=>`<span class="chip-ques" data-val="${s}" style="${question.includes(s)?chipOn:chipOff}">${s}</span>`).join('')}</div>
+    <textarea id="fld-question" rows="2" placeholder="e.g. Liver cancer screening? Rule out metastasis?" style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;outline:none;resize:vertical;box-sizing:border-box;margin-bottom:14px;font-family:inherit;color:#111827;background:#fff">${question}</textarea>
+
+    <!-- 病史 -->
+    <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:4px">Medical History</label>
+    <div id="chips-history" style="margin-bottom:6px;line-height:2">${quickHistory.map(s=>`<span class="chip-hist" data-val="${s}" style="${history.includes(s)?chipOn:chipOff}">${s}</span>`).join('')}</div>
+    <textarea id="fld-history" rows="2" placeholder="e.g. Hepatitis B carrier, cirrhosis Child-Pugh A, diabetes..." style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;outline:none;resize:vertical;box-sizing:border-box;margin-bottom:18px;font-family:inherit;color:#111827;background:#fff">${history}</textarea>
+
+    <!-- 按钮 -->
+    <div style="display:flex;gap:10px;justify-content:flex-end;border-top:1px solid #f3f4f6;padding-top:14px">
+      <button id="btn-cancel" style="padding:9px 22px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#6b7280;font-size:13px;font-weight:500;cursor:pointer">Cancel</button>
+      <button id="btn-generate" style="padding:9px 28px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 2px 6px rgba(37,99,235,0.3)">Generate Report</button>
+    </div>
+  </div>
+</div>`;
+    };
+
+    const collect = () => {
+      age = parseInt((document.getElementById('fld-age') as HTMLInputElement)?.value || '0', 10) || 0;
+      gender = (document.getElementById('fld-gender') as HTMLSelectElement)?.value || '';
+      complaint = (document.getElementById('fld-complaint') as HTMLTextAreaElement)?.value || '';
+      question = (document.getElementById('fld-question') as HTMLTextAreaElement)?.value || '';
+      history = (document.getElementById('fld-history') as HTMLTextAreaElement)?.value || '';
+    };
+
+    const updateScreenshotDisplay = (src: string) => {
+      const container = document.getElementById('screenshot-container');
+      if (!container) return;
+      if (src) {
+        container.innerHTML = `<img src="${src}" style="width:100%;max-height:180px;object-fit:contain;display:block">`;
+      } else {
+        container.innerHTML = '<span style="color:#94a3b8;font-size:12px;padding:30px">No 3D view captured. Click Recapture to take a screenshot.</span>';
+      }
+    };
+
+    const doRecapture = () => {
+      console.log('[TotalSeg] Recapture clicked, attempting screenshot...');
+      const s = capture3DScreenshot(servicesMgr);
+      console.log('[TotalSeg] Screenshot result length:', s?.length || 0);
+      if (s && s.length > 100) {
+        currentScreenshot = s;
+        updateScreenshotDisplay(s);
+      } else {
+        alert('Cannot capture 3D screenshot. Make sure the 3D viewport is visible and contains rendered content.');
+      }
+    };
+
+    const doGenerate = async () => {
+      collect();
+      uiModalService.hide();
+
+      const loadId = uiModalService.show({
+        content: () => React.createElement('div', {
+          style: { background:'#0f172a', borderRadius:14, padding:40, minWidth:360, textAlign:'center', color:'#f1f5f9', boxShadow:'0 20px 50px rgba(0,0,0,0.4)' }
+        },
+          React.createElement('div', { style: { fontSize:36, marginBottom:10 } }, '\u2695\uFE0F'),
+          React.createElement('div', { style: { fontSize:15, fontWeight:600, marginBottom:4 } }, 'Generating Radiology Report'),
+          React.createElement('div', { style: { fontSize:11, color:'#94a3b8' } }, 'Analyzing organ volumes & clinical context'),
+          React.createElement('div', { style: { fontSize:10, color:'#64748b', marginTop:4 } }, 'Groq Llama 3.3 70B'),
+        ),
+      });
+
+      try {
+        const resp = await fetch('http://localhost:8004/generate_report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            organs: (_lastTotalSegResult?.organs || []),
+            lesions: (_lastTotalSegResult?.lesions || []),
+            patient_age: age,
+            patient_gender: gender,
+            chief_complaint: complaint,
+            clinical_question: question,
+            medical_history: history,
+            screenshot_base64: currentScreenshot || '',
+          }),
+          signal: AbortSignal.timeout(120000),
+        });
+
+        uiModalService.hide(loadId);
+
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+        const data = await resp.json();
+
+        if (!data.success) {
+          uiNotificationService.show({ title: 'Report Error', message: data.error || 'Unknown error', type: 'error', duration: 6000 });
+          return;
+        }
+
+        if (_lastTotalSegResult) _lastTotalSegResult.screenshot3DBase64 = currentScreenshot || '';
+
+        showReportModal(uiModalService, {
+          report: data.report,
+          organs: _lastTotalSegResult?.organs || [],
+          lesions: _lastTotalSegResult?.lesions || [],
+          patientInfo: { age, gender, chiefComplaint: complaint, clinicalQuestion: question, medicalHistory: history },
+          screenshot3DBase64: currentScreenshot || '',
+        });
+
+      } catch (e: any) {
+        uiModalService.hide(loadId);
+        uiNotificationService.show({ title: 'Report Failed', message: e?.message || 'Error', type: 'error', duration: 6000 });
+      }
+    };
+
+    // 创建自定义遮罩层（绕过 OHIF Modal 自带关闭按钮）
+    const overlay = document.createElement('div');
+    overlay.id = 'totalSeg-report-overlay';
+    Object.assign(overlay.style, {
+      position: 'fixed', inset: '0', zIndex: '10000',
+      background: 'rgba(0,0,0,0.5)', display: 'flex',
+      alignItems: 'center', justifyContent: 'center',
+    });
+
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = buildHtml();
+    overlay.appendChild(wrapper);
+    document.body.appendChild(overlay);
+
+    // 点击遮罩外部关闭
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeOverlay();
+    });
+    // ESC 关闭
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeOverlay(); };
+
+    const closeOverlay = () => {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+    };
+
+    document.addEventListener('keydown', onKey);
+
+    // 绑定事件
+    document.getElementById('btn-close-form')?.addEventListener('click', () => closeOverlay());
+    document.getElementById('btn-cancel')?.addEventListener('click', () => closeOverlay());
+    document.getElementById('btn-generate')?.addEventListener('click', () => { closeOverlay(); doGenerate(); });
+    document.getElementById('recapture-btn')?.addEventListener('click', () => doRecapture());
+
+    // Chips
+    const setupChips = (containerId: string, chipClass: string, fieldId: string) => {
+      document.getElementById(containerId)?.addEventListener('click', (e: any) => {
+        if (e.target.classList.contains(chipClass)) {
+          const val = e.target.dataset.val;
+          const field = document.getElementById(fieldId) as HTMLTextAreaElement;
+          if (field) {
+            const cur = field.value;
+            const hasIt = cur.includes(val);
+            field.value = hasIt ? cur.replace(val, '').replace(/,\s*,/g,',').replace(/^,\s*|,\s*$/g,'').trim() : (cur ? cur + ', ' + val : val);
+            collect();
+            e.target.style.background = field.value.includes(val) ? '#eff6ff' : '#f9fafb';
+            e.target.style.color = field.value.includes(val) ? '#1d4ed8' : '#6b7280';
+            e.target.style.borderColor = field.value.includes(val) ? '#2563eb' : '#d1d5db';
+          }
+        }
+      });
+    };
+    setupChips('chips-symptoms', 'chip-symp', 'fld-complaint');
+    setupChips('chips-question', 'chip-ques', 'fld-question');
+    setupChips('chips-history', 'chip-hist', 'fld-history');
+  }
+
+  // ── 报告展示弹窗 ──
+  function showReportModal(uiModalService: any, reportData: TotalSegReportData) {
+    const overlay = document.createElement('div');
+    overlay.id = 'totalSeg-reportOverlay';
+    Object.assign(overlay.style, {
+      position: 'fixed', inset: '0', zIndex: '10001',
+      background: 'rgba(0,0,0,0.45)', display: 'flex',
+      alignItems: 'center', justifyContent: 'center',
+    });
+    document.body.appendChild(overlay);
+
+    // 用 React 渲染 TotalSegReportModal 到 overlay 里
+    const root = document.createElement('div');
+    overlay.appendChild(root);
+
+    // 动态导入 ReactDOM
+    const renderRoot = async () => {
+      try {
+        const ReactDOM = await import('react-dom/client');
+        const r = ReactDOM.createRoot(root);
+        r.render(React.createElement(TotalSegReportModal, {
+          reportData,
+          isLoading: false,
+          error: null,
+          onClose: () => { r.unmount(); overlay.remove(); },
+        }));
+      } catch {
+        // fallback: render directly
+        root.innerHTML = '';
+        const el = React.createElement(TotalSegReportModal, {
+          reportData,
+          isLoading: false,
+          error: null,
+          onClose: () => { overlay.remove(); },
+        });
+        // @ts-ignore
+        const { render } = await import('react-dom');
+        // @ts-ignore
+        render(el, root);
+      }
+    };
+    renderRoot();
+
+    // ESC 关闭
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); } };
+    document.addEventListener('keydown', onKey);
+  }
+
+  // ── 病灶检测提示面板 ──
+  function showLesionPromptPanel(
+    availableLesions: string[],
+    seriesUID: string,
+    organActors: Map<string, any>, organColors: Map<string, number[]>,
+    csVp3d: any, commandsManager: any, cornerstoneViewportService: any, viewportGridService: any,
+  ) {
+    const old = document.getElementById('totalSeg-lesion-panel');
+    if (old) old.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'totalSeg-lesion-panel';
+    Object.assign(panel.style, {
+      position: 'fixed', right: '8px', top: '60px', zIndex: '9998',
+      background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px',
+      minWidth: '220px', maxWidth: '260px',
+      overflow: 'hidden', boxShadow: '0 8px 30px rgba(0,0,0,0.12)',
+      fontSize: '12px', fontFamily: '-apple-system, sans-serif',
+    });
+    document.body.appendChild(panel);
+
+    const organLabels: Record<string, string> = { liver: 'Liver', kidney: 'Kidney', lung: 'Lung' };
+
+    let h = `<div style="background:#dc2626;padding:10px 14px;color:#fff;font-weight:700;font-size:13px;display:flex;justify-content:space-between;align-items:center">
+      <span>Lesion Detection</span>
+      <button onclick="document.getElementById('totalSeg-lesion-panel').remove()" style="background:none;border:none;color:rgba(255,255,255,0.7);font-size:16px;cursor:pointer">&times;</button>
+    </div>`;
+
+    h += `<div style="padding:8px 12px;font-size:11px;color:#64748b;border-bottom:1px solid #f1f5f9">These organs support lesion detection. Click to segment lesions.</div>`;
+
+    availableLesions.forEach((org: string) => {
+      const label = organLabels[org] || org;
+      const loadingId = `lesion-btn-${org}`;
+      h += `<div id="${loadingId}" style="margin:0 8px 6px;padding:8px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-size:12px;color:#991b1b;font-weight:600;display:flex;justify-content:space-between;align-items:center" onclick="
+        var btn=document.getElementById('${loadingId}');
+        if(btn.dataset.loading==='1')return;
+        btn.dataset.loading='1';
+        btn.innerHTML='${label} <span style=font-size:10px;color:#dc2626>detecting...</span>';
+        window.__runLesionDetection('${org}', '${seriesUID}');
+      ">
+        <span>${label}</span>
+        <span style="font-size:10px;color:#dc2626">Detect &rarr;</span>
+      </div>`;
+    });
+
+    panel.innerHTML = h;
+
+    // 全局点击处理
+    (window as any).__runLesionDetection = async (organ: string, uid: string) => {
+      uiNotificationService.show({ title: 'Lesion Detection', message: `Detecting ${organ} lesions...`, type: 'info', duration: 4000 });
+      try {
+        console.log('[Lesion] Fetching lesion detection...');
+        const resp = await fetch('http://localhost:8004/segment_lesion_by_organ', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ series_instance_uid: uid, organ_name: organ }),
+          signal: AbortSignal.timeout(600000),
+        });
+        console.log('[Lesion] Response status:', resp.status);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        console.log('[Lesion] Data received, meshes:', data.meshes?.length);
+        const lesionMeshes = data.meshes || [];
+        if (!lesionMeshes.length) {
+          uiNotificationService.show({ title: 'Lesion Detection', message: `No ${organ} lesions found. Organ is normal.`, type: 'info', duration: 5000 });
+          // 恢复按钮
+          const btn = document.getElementById(`lesion-btn-${organ}`);
+          if (btn) { btn.dataset.loading = '0'; btn.innerHTML = `<span>${organLabels[organ]||organ}</span><span style="font-size:10px;color:#dc2626">Detect &rarr;</span>`; }
+          return;
+        }
+        // 渲染病灶 mesh（红色）—— 动态查找 3D 视口
+        let renderer: any = null;
+        let csVp: any = null;
+        try {
+          const vpMap = viewportGridService.getState().viewports as Map<string, any>;
+          for (const [id, vp] of vpMap.entries()) {
+            if ((vp?.viewportOptions?.viewportType || '') === 'volume3d') {
+              csVp = cornerstoneViewportService.getCornerstoneViewport(id) as any;
+              renderer = csVp?.getRenderer?.();
+              break;
+            }
+          }
+        } catch(e) { console.warn('[Lesion] viewport search error:', e); }
+
+        if (renderer) {
+          let imgDataVtk: any = null;
+          try { const va = renderer.getVolumes?.()?.[0]; if (va) imgDataVtk = va.getMapper?.()?.getInputData?.(); } catch(e) {}
+          const toWorld = imgDataVtk && typeof imgDataVtk.indexToWorld === 'function' ? (ijk: number[]) => imgDataVtk.indexToWorld(ijk) : (ijk: number[]) => ijk;
+
+          for (const m of lesionMeshes) {
+            if (m.vertices.length < 3 || m.faces.length < 3) continue;
+            const physVerts = new Float32Array(m.vertices.length * 3);
+            for (let i = 0; i < m.vertices.length; i++) {
+              const w = toWorld([m.vertices[i][0], m.vertices[i][1], m.vertices[i][2]]);
+              physVerts[i*3]=w[0]; physVerts[i*3+1]=w[1]; physVerts[i*3+2]=w[2];
+            }
+            const pd = vtkPolyData.newInstance(); pd.getPoints().setData(physVerts, 3);
+            const vf: number[] = []; for (const f of m.faces) vf.push(3, f[0], f[1], f[2]); pd.getPolys().setData(new Uint32Array(vf));
+            const mp = vtkMapper.newInstance(); mp.setInputData(pd);
+            const ac = vtkActor.newInstance(); ac.setMapper(mp);
+            ac.getProperty().setColor(1.0, 0.15, 0.15); ac.getProperty().setOpacity(0.7);
+            ac.getProperty().setEdgeVisibility(true); ac.getProperty().setEdgeColor(0.8, 0.1, 0.1);
+            renderer.addActor(ac);
+          }
+          csVp?.render?.();
+          setTimeout(() => csVp?.render?.(), 300);
+          console.log('[Lesion] Rendered lesion meshes successfully');
+        } else {
+          console.warn('[Lesion] No 3D renderer found — lesion meshes not displayed');
+        }
+        uiNotificationService.show({ title: 'Lesion Found', message: `${lesionMeshes.length} ${organ} lesion(s) detected!`, type: 'success', duration: 6000 });
+
+        // 更新缓存供报告生成
+        if (_lastTotalSegResult) {
+          const existing = _lastTotalSegResult.lesions.filter(l => !l.name.startsWith(organ + '_'));
+          _lastTotalSegResult.lesions = [
+            ...existing,
+            ...lesionMeshes.map((m: any) => ({ name: m.name, volume_cm3: m.volume_cm3 || 0, label: m.label })),
+          ];
+          console.log('[Lesion] Updated report cache:', _lastTotalSegResult.lesions.length, 'lesions total');
+        }
+      } catch (e: any) {
+        uiNotificationService.show({ title: 'Lesion Error', message: e?.message || 'Failed', type: 'error', duration: 5000 });
+        const btn = document.getElementById(`lesion-btn-${organ}`);
+        if (btn) { btn.dataset.loading = '0'; btn.innerHTML = `<span>${organLabels[organ]||organ}</span><span style="font-size:10px;color:#dc2626">Detect &rarr;</span>`; }
+      }
+    };
   }
 
   const actions = {
@@ -4137,6 +4582,927 @@ function commandsModule({
       }
     },
 
+    // ── TotalSegmentator 全器官一键分割 + 3D 多色渲染 ──────────────────
+    totalSegmentAll: async () => {
+      const { uiModalService } = servicesManager.services;
+      const { activeViewportId } = viewportGridService.getState();
+
+      // 1. 获取 SeriesInstanceUID
+      const vpEntry = viewportGridService.getState().viewports.get(activeViewportId);
+      const dsUID = vpEntry?.displaySetInstanceUIDs?.[0];
+      const ds = dsUID ? displaySetService.getDisplaySetByUID(dsUID) : null;
+      const seriesInstanceUID = (ds as any)?.SeriesInstanceUID;
+      if (!seriesInstanceUID) {
+        uiNotificationService.show({
+          title: 'TotalSegmentator',
+          message: 'Cannot find SeriesInstanceUID — please load DICOM from Orthanc first.',
+          type: 'error',
+          duration: 6000,
+        });
+        return;
+      }
+
+      // 2. 显示加载模态框
+      let loadingMsgEl: any = null;
+      let loadingSubEl: any = null;
+      let loadingId: any = null;
+      if (uiModalService) {
+        loadingId = uiModalService.show({
+          title: 'TotalSegmentator — Segmenting All Organs',
+          content: () => React.createElement(
+            'div',
+            { style: { padding: 32, textAlign: 'center', color: '#e5e7eb' } },
+            React.createElement('div', { ref: (el: any) => { loadingMsgEl = el; }, style: { fontSize: 16, marginBottom: 8 } }, 'Loading DICOM series from Orthanc...'),
+            React.createElement('div', { ref: (el: any) => { loadingSubEl = el; }, style: { fontSize: 12, color: '#9ca3af' } }, `${seriesInstanceUID.slice(0, 20)}...`)
+          ),
+          containerClassName: 'min-w-[380px] p-4',
+        });
+      }
+
+      const updateLoading = (msg: string, sub?: string) => {
+        if (loadingMsgEl) loadingMsgEl.textContent = msg;
+        if (loadingSubEl && sub) loadingSubEl.textContent = sub;
+      };
+
+      try {
+        // 3. 调用 TotalSegmentator 3D API
+        updateLoading('Running AI inference (GPU)...', '104 organs · ~60s');
+        const t0 = performance.now() / 1000;
+        const resp = await fetch('http://localhost:8004/segment_3d', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ series_instance_uid: seriesInstanceUID }),
+          signal: AbortSignal.timeout(600000),
+        });
+
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => '');
+          throw new Error(`HTTP ${resp.status}: ${errText.slice(0, 200)}`);
+        }
+
+        // 先关闭加载，再解析大数据（避免 UI 卡住）
+        if (loadingId && uiModalService) { uiModalService.hide(loadingId); loadingId = null; }
+        updateLoading('Parsing results...');
+
+        const data = await resp.json();
+        if (!data.success) throw new Error(data.error || 'Segmentation failed');
+        const elapsed = performance.now() / 1000 - t0;
+
+        // 4. 处理结果
+        const meshes = data.meshes || [];
+        if (meshes.length === 0) {
+          uiNotificationService.show({
+            title: 'TotalSegmentator',
+            message: 'No meshes generated — try a different series',
+            type: 'warning',
+            duration: 6000,
+          });
+          return;
+        }
+
+        // 5. 切换到 3D Only 布局
+        updateLoading('Switching to 3D view...', `${meshes.length} organ meshes`);
+        
+        // 查找并切换 3D protocol
+        let threeDProtocolId = '';
+        let threeDStageIdx = 0;
+        try {
+          const protocols: any[] = Array.from((hangingProtocolService as any).protocols?.values?.() ?? []);
+          const hp = protocols.find((hp: any) => {
+            const name = (hp.name || hp.id || '').toLowerCase();
+            return hp.isPreset && (name.includes('mprand3d') || name.includes('3donly') || name.includes('3d only'));
+          }) || protocols.find((hp: any) => {
+            const name = (hp.name || hp.id || '').toLowerCase();
+            return hp.isPreset && (name.includes('3d') || name.includes('volume'));
+          });
+          if (hp) {
+            threeDProtocolId = hp.id;
+            const stages = hp.stages || [];
+            for (let i = 0; i < stages.length; i++) {
+              const vps = stages[i]?.viewportStructure?.viewports || [];
+              if (vps.some((v: any) => (v.viewportOptions?.viewportType || v.type || '').includes('volume3d'))) {
+                threeDStageIdx = i; break;
+              }
+            }
+          }
+        } catch(e) { console.warn('[TotalSeg] protocol search error:', e); }
+
+        if (threeDProtocolId) {
+          await commandsManager.runCommand('setHangingProtocol', {
+            protocolId: threeDProtocolId,
+            stageIndex: threeDStageIdx,
+          });
+        }
+
+        // 6. 轮询等待 3D volume viewport
+        let volumeVpId = '';
+        let csVp3d: any = null;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          const vpMap = viewportGridService.getState().viewports as Map<string, any>;
+          for (const [id, vp] of vpMap.entries()) {
+            if ((vp?.viewportOptions?.viewportType || '') === 'volume3d') {
+              volumeVpId = id;
+              csVp3d = cornerstoneViewportService.getCornerstoneViewport(id) as any;
+              break;
+            }
+          }
+          if (volumeVpId) break;
+          await new Promise(r => setTimeout(r, 800));
+        }
+
+        if (!volumeVpId || !csVp3d) {
+          // 没有 3D 视图 — 降级为表格显示
+          updateLoading('3D viewport not available — showing table...');
+          showResultsTable(data, uiModalService);
+          uiNotificationService.show({
+            title: 'TotalSegmentator Done',
+            message: `${meshes.length} organ meshes generated in ${data.elapsed_s}s (no 3D viewport)`,
+            type: 'success',
+            duration: 8000,
+          });
+          return;
+        }
+
+        // 7. 渲染多器官 mesh（不同颜色）
+        const renderer = csVp3d?.getRenderer?.();
+        if (!renderer) {
+          updateLoading('No renderer — showing table...');
+          showResultsTable(data, uiModalService);
+          return;
+        }
+
+        // 清除旧 mesh actors
+        try {
+          const oldActors = (renderer as any).getActors?.() ?? [];
+          for (const a of oldActors) renderer.removeActor(a);
+        } catch(e) {}
+
+        console.log(`[TotalSeg] Rendering ${meshes.length} organ meshes in 3D...`);
+        console.log(`[TotalSeg] spacing=${data.spacing}, origin=${data.origin}`);
+
+        // 从 vtk.js Volume 读取 imageData，用 indexToWorld() 转换像素→世界坐标
+        let imgData: any = null;
+        try {
+          const volActor = (renderer as any).getVolumes?.()?.[0];
+          if (volActor) {
+            imgData = volActor.getMapper?.()?.getInputData?.();
+            if (imgData) {
+              const vo = imgData.getOrigin();
+              const vs = imgData.getSpacing();
+              const vd = imgData.getDimensions();
+              const vdir = imgData.getDirection?.();
+              console.log(`[TotalSeg] VTK origin: [${vo[0]?.toFixed(1)},${vo[1]?.toFixed(1)},${vo[2]?.toFixed(1)}]`);
+              console.log(`[TotalSeg] VTK spacing: [${vs[0]},${vs[1]},${vs[2]}]`);
+              console.log(`[TotalSeg] VTK dims: [${vd[0]},${vd[1]},${vd[2]}]`);
+              if (vdir) console.log(`[TotalSeg] VTK dir: [${vdir.slice(0,3).map((x:number)=>x.toFixed(2))}] / [${vdir.slice(3,6).map((x:number)=>x.toFixed(2))}] / [${vdir.slice(6,9).map((x:number)=>x.toFixed(2))}]`);
+            }
+          }
+        } catch(e) { console.log('[TotalSeg] Could not read VTK volume:', e); }
+
+        // 后端输出 [col, row, slice] 像素坐标，用 vtk.js indexToWorld 转到世界坐标
+        const toWorld = imgData && typeof (imgData as any).indexToWorld === 'function'
+          ? (ijk: number[]) => (imgData as any).indexToWorld(ijk)
+          : (ijk: number[]) => ijk;  // 兜底：原样使用
+
+        // 诊断：打印第一个 mesh 的像素→世界坐标转换
+        let diagPrinted = false;
+        let boundsPrinted = false;
+
+        // 存储 actor 引用，供交互面板控制显隐
+        const organActors = new Map<string, any>();
+        const organColors = new Map<string, number[]>();
+        
+        for (const mesh of meshes) {
+          const { vertices, faces, color } = mesh;
+          const vCount = vertices.length;
+          const fCount = faces.length;
+          if (vCount < 3 || fCount < 3) continue;
+
+          const physVerts = new Float32Array(vCount * 3);
+          for (let i = 0; i < vCount; i++) {
+            const world = toWorld([vertices[i][0], vertices[i][1], vertices[i][2]]);
+            physVerts[i * 3 + 0] = world[0];
+            physVerts[i * 3 + 1] = world[1];
+            physVerts[i * 3 + 2] = world[2];
+
+            // 诊断：打印前 3 个顶点的转换
+            if (!diagPrinted && i < 3) {
+              console.log(`[TotalSeg DIAG] mesh="${mesh.name}" vtx${i}: px=[${vertices[i].map((v:number)=>v.toFixed(1)).join(',')}] -> world=[${world.map((v:number)=>v.toFixed(1)).join(',')}]`);
+            }
+          }
+          if (!diagPrinted) {
+            diagPrinted = true;
+            // 检查 volume actor 是否有变换
+            try {
+              const volActor = (renderer as any).getVolumes?.()?.[0];
+              if (volActor) {
+                const pos = volActor.getPosition?.() || volActor.position;
+                const ori = volActor.getOrientation?.();
+                const scl = volActor.getScale?.();
+                console.log(`[TotalSeg DIAG] volActor pos=${JSON.stringify(pos)}, ori=${JSON.stringify(ori)}, scl=${JSON.stringify(scl)}`);
+                // 也检查 volume 的 getBounds
+                const vb = volActor.getBounds?.();
+                console.log(`[TotalSeg DIAG] volActor bounds=${JSON.stringify(vb?.map((v:number)=>v.toFixed(1)))}`);
+                // 检查 imageData bounds
+                if (imgData) {
+                  const ib = imgData.getBounds?.();
+                  console.log(`[TotalSeg DIAG] imgData bounds=${JSON.stringify(ib?.map((v:number)=>v.toFixed(1)))}`);
+                }
+              }
+            } catch(e) { console.log('[TotalSeg DIAG] volActor check error:', e); }
+          }
+
+          const polydata = vtkPolyData.newInstance();
+          polydata.getPoints().setData(physVerts, 3);
+
+          const vtkFaces: number[] = [];
+          for (const f of faces) vtkFaces.push(3, f[0], f[1], f[2]);
+          polydata.getPolys().setData(new Uint32Array(vtkFaces));
+
+          const mapper = vtkMapper.newInstance();
+          mapper.setInputData(polydata);
+
+          const actor = vtkActor.newInstance();
+          actor.setMapper(mapper);
+          actor.getProperty().setColor(color[0], color[1], color[2]);
+          actor.getProperty().setOpacity(0.55);
+          actor.getProperty().setEdgeVisibility(true);
+          actor.getProperty().setEdgeColor(color[0] * 0.5, color[1] * 0.5, color[2] * 0.5);
+
+          renderer.addActor(actor);
+          // 存储 actor 供交互面板控制显隐
+          organActors.set(mesh.name, actor);
+          organColors.set(mesh.name, color);
+          // 打印第一个 mesh 的 bounds
+          if (!boundsPrinted) {
+            boundsPrinted = true;
+            const mb = polydata.getBounds();
+            console.log(`[TotalSeg DIAG] mesh "${mesh.name}" polydata bounds: [${mb.map((v:number)=>v.toFixed(1)).join(',')}]`);
+          }
+          console.log(`[TotalSeg] ✅ ${mesh.name}: ${vCount}v ${fCount}f color=[${color.map(c=>c.toFixed(1)).join(',')}]`);
+        }
+
+        csVp3d.render?.();
+        setTimeout(() => csVp3d.render?.(), 300);
+
+        // 8. 显示交互式器官面板（可拖拽 + 可关闭）
+        const showOrganPanel = () => {
+          const organs = Array.from(organActors.keys());
+          const visibility = new Map<string, boolean>();
+          organs.forEach(name => visibility.set(name, true));
+
+          // 移除旧面板
+          const oldPanel = document.getElementById('totalSeg-organ-panel');
+          if (oldPanel) oldPanel.remove();
+
+          const panelEl = document.createElement('div');
+          panelEl.id = 'totalSeg-organ-panel';
+          Object.assign(panelEl.style, {
+            position: 'fixed', left: '8px', top: '60px', zIndex: '9999',
+            background: 'rgba(15,15,25,0.92)', border: '1px solid rgba(255,255,255,0.15)',
+            borderRadius: '8px', padding: '0', minWidth: '200px', maxWidth: '240px',
+            maxHeight: 'calc(100vh - 120px)', overflow: 'hidden',
+            backdropFilter: 'blur(8px)', fontSize: '12px', color: '#ccc',
+            display: 'flex', flexDirection: 'column',
+          });
+          document.body.appendChild(panelEl);
+
+          // ── 拖拽逻辑 ──
+          let dragging = false, dragStartX = 0, dragStartY = 0, panelStartX = 0, panelStartY = 0;
+          const onDragStart = (e: MouseEvent) => {
+            if ((e.target as HTMLElement).closest('button, .organ-panel-row')) return;
+            dragging = true;
+            dragStartX = e.clientX; dragStartY = e.clientY;
+            panelStartX = panelEl.offsetLeft; panelStartY = panelEl.offsetTop;
+            panelEl.style.transition = 'none';
+            document.body.style.userSelect = 'none';
+          };
+          const onDragMove = (e: MouseEvent) => {
+            if (!dragging) return;
+            panelEl.style.left = (panelStartX + e.clientX - dragStartX) + 'px';
+            panelEl.style.top = (panelStartY + e.clientY - dragStartY) + 'px';
+          };
+          const onDragEnd = () => {
+            dragging = false;
+            panelEl.style.transition = '';
+            document.body.style.userSelect = '';
+          };
+          document.addEventListener('mousemove', onDragMove);
+          document.addEventListener('mouseup', onDragEnd);
+
+          const renderPanel = () => {
+            const visibleCount = Array.from(visibility.values()).filter(v=>v).length;
+            let html = '';
+
+            // 标题栏（可拖拽 + 关闭按钮）
+            html += '<div class="organ-panel-header" style="'
+              + 'padding:6px 10px;display:flex;justify-content:space-between;align-items:center;'
+              + 'cursor:move;border-bottom:1px solid rgba(255,255,255,0.08);'
+              + 'background:rgba(255,255,255,0.03);user-select:none'
+              + '">'
+              + `<span style="font-weight:600;color:#e5e7eb;font-size:13px">Organs (${visibleCount}/${organs.length})</span>`
+              + '<div style="display:flex;gap:4px;align-items:center">'
+              + '<button class="organ-panel-btn" data-action="all">All</button>'
+              + '<button class="organ-panel-btn" data-action="none">None</button>'
+              + '<button class="organ-panel-close" style="'
+              + 'background:none;border:none;color:#888;font-size:16px;cursor:pointer;'
+              + 'padding:0 2px;line-height:1;margin-left:4px'
+              + '" title="Close">\u00D7</button>'
+              + '</div></div>';
+
+            // 器官列表（可滚动）
+            html += '<div style="overflow-y:auto;max-height:calc(100vh - 200px);padding:4px 0">';
+            organs.forEach(name => {
+              const c = organColors.get(name) || [0.5,0.5,0.5];
+              const vis = visibility.get(name) ?? true;
+              const r = Math.round(c[0]*255), g = Math.round(c[1]*255), b = Math.round(c[2]*255);
+              html += '<div class="organ-panel-row" data-organ="' + name + '" style="'
+                + 'display:flex;align-items:center;gap:8px;padding:3px 10px;cursor:pointer;'
+                + (vis ? 'background:rgba(255,255,255,0.05);' : '')
+                + '">'
+                + `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;`
+                + `background:rgb(${r},${g},${b});opacity:${vis?1:0.25};flex-shrink:0"></span>`
+                + `<span style="font-family:monospace;font-size:11px;opacity:${vis?1:0.35};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</span>`
+                + (vis ? '' : '<span style="font-size:10px;color:#555;margin-left:auto">off</span>')
+                + '</div>';
+            });
+            html += '</div>';
+            panelEl.innerHTML = html;
+
+            // 标题栏拖拽
+            const header = panelEl.querySelector('.organ-panel-header');
+            header?.addEventListener('mousedown', onDragStart as any);
+
+            // 关闭按钮
+            panelEl.querySelector('.organ-panel-close')?.addEventListener('click', () => {
+              document.removeEventListener('mousemove', onDragMove);
+              document.removeEventListener('mouseup', onDragEnd);
+              panelEl.remove();
+            });
+
+            // 按钮事件
+            panelEl.querySelectorAll('.organ-panel-btn').forEach(btn => {
+              btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const action = (btn as HTMLElement).dataset.action;
+                organs.forEach(name => {
+                  const newVis = action === 'all';
+                  visibility.set(name, newVis);
+                  organActors.get(name)?.setVisibility(newVis);
+                });
+                csVp3d?.render?.();
+                renderPanel();
+              });
+            });
+            // 器官行事件
+            panelEl.querySelectorAll('.organ-panel-row').forEach(row => {
+              row.addEventListener('click', () => {
+                const name = (row as HTMLElement).dataset.organ!;
+                const newVis = !(visibility.get(name) ?? true);
+                visibility.set(name, newVis);
+                organActors.get(name)?.setVisibility(newVis);
+                csVp3d?.render?.();
+                renderPanel();
+              });
+            });
+          };
+          renderPanel();
+        };
+
+        showOrganPanel();
+
+        // 缓存结果供报告生成
+        _lastTotalSegResult = {
+          meshes,
+          organs: meshes.map((m: any) => ({ name: m.name, volume_cm3: m.volume_cm3 || 0, label: m.label })),
+          lesions: [],
+          screenshot3DBase64: '',
+        };
+
+        // 提示可用病灶检测
+        const availableLesions: string[] = data.available_lesions || [];
+        if (availableLesions.length > 0) {
+          setTimeout(() => showLesionPromptPanel(availableLesions, data.series_instance_uid || seriesInstanceUID, organActors, organColors, csVp3d, commandsManager, cornerstoneViewportService, viewportGridService), 500);
+        }
+
+        uiNotificationService.show({
+          title: '✅ TotalSegmentator Done',
+          message: `${meshes.length} organs rendered in 3D. Switch to 3D viewport to see them!`,
+          type: 'success',
+          duration: 10000,
+        });
+
+      } catch (e: any) {
+        if (loadingId && uiModalService) { uiModalService.hide(loadingId); loadingId = null; }
+        uiNotificationService.show({
+          title: 'TotalSegmentator Error',
+          message: e?.message || 'Segmentation failed. Is port 8004 running?',
+          type: 'error',
+          duration: 10000,
+        });
+      }
+    },
+
+    // ── 按名称分割单个器官 ──────────────────────────────────────────
+    segmentOrganByName: async () => {
+      const { uiModalService } = servicesManager.services;
+      const { activeViewportId } = viewportGridService.getState();
+
+      const vpEntry = viewportGridService.getState().viewports.get(activeViewportId);
+      const dsUID = vpEntry?.displaySetInstanceUIDs?.[0];
+      const ds = dsUID ? displaySetService.getDisplaySetByUID(dsUID) : null;
+      const seriesInstanceUID = (ds as any)?.SeriesInstanceUID;
+      if (!seriesInstanceUID) {
+        uiNotificationService.show({
+          title: 'Segment Organ', message: 'No DICOM series loaded.', type: 'error', duration: 5000,
+        });
+        return;
+      }
+
+      // 弹出输入框
+      const organName = await new Promise<string | null>(resolve => {
+        if (!uiModalService) return resolve(null);
+        let inputValue = 'liver';
+        const InputContent = () =>
+          React.createElement('div', { style: { padding: 20, color: '#e5e7eb', minWidth: 340 } },
+            React.createElement('p', { style: { fontSize: 13, marginBottom: 8 } }, 'Enter an organ name to segment:'),
+            React.createElement('input', {
+              type: 'text',
+              defaultValue: 'liver',
+              placeholder: 'e.g. liver, spleen, kidney_left, lung...',
+              onChange: (e: any) => { inputValue = e.target.value; },
+              style: { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #555', background: '#1e1e2e', color: '#fff', fontSize: 14, marginBottom: 14 },
+            }),
+            React.createElement('p', { style: { fontSize: 10, color: '#888', marginBottom: 12 } }, 'Examples: liver, spleen, kidney_right, lung_upper_lobe_left, aorta, heart_myocardium'),
+            React.createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
+              React.createElement('button', {
+                className: 'bg-blue-600 hover:bg-blue-500 text-white font-medium py-1 px-4 rounded text-sm',
+                onClick: () => { uiModalService.hide(modalId); resolve(inputValue.trim()); },
+              }, 'Segment'),
+              React.createElement('button', {
+                className: 'bg-slate-600 hover:bg-slate-500 text-white font-medium py-1 px-4 rounded text-sm',
+                onClick: () => { uiModalService.hide(modalId); resolve(null); },
+              }, 'Cancel'),
+            ),
+          );
+        const modalId = uiModalService.show({ title: 'Segment Organ by Name', content: InputContent, containerClassName: 'min-w-[360px] p-4', isDraggable: true });
+      });
+
+      if (!organName) return;
+
+      // 加载
+      let loadingId: any = null;
+      if (uiModalService) {
+        loadingId = uiModalService.show({
+          title: '',
+          content: () => React.createElement('div', { style: { padding: 32, textAlign: 'center', color: '#fff' } },
+            React.createElement('div', null, `Running TotalSegmentator for "${organName}"...`),
+            React.createElement('div', { style: { fontSize: 12, color: '#aaa', marginTop: 8 } }, 'This takes about 60 seconds'),
+          ),
+          containerClassName: 'min-w-[320px] p-4',
+        });
+      }
+
+      try {
+        const resp = await fetch('http://localhost:8004/segment_by_name', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ series_instance_uid: seriesInstanceUID, organ_name: organName }),
+          signal: AbortSignal.timeout(120000),
+        });
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => '');
+          throw new Error(errText || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        if (loadingId && uiModalService) { uiModalService.hide(loadingId); loadingId = null; }
+
+        if (!data.success || !data.organs?.length) {
+          uiNotificationService.show({ title: 'Segment Organ', message: `No "${organName}" found in this CT.`, type: 'warning', duration: 6000 });
+          return;
+        }
+
+        // 显示结果表格
+        if (uiModalService) {
+          const organs = data.organs || [];
+          uiModalService.show({
+            title: `TotalSegmentator — "${organName}"`,
+            content: () => React.createElement('div', { style: { padding: 18, color: '#e5e7eb', minWidth: 380 } },
+              React.createElement('div', { style: { fontSize: 14, fontWeight: 600, marginBottom: 8 } },
+                `Found ${organs.length} matching organ(s)`
+              ),
+              React.createElement('div', { style: { fontSize: 11, color: '#9ca3af', marginBottom: 10 } },
+                `${data.elapsed_s}s | ${(data.shape||[]).join('×')}`
+              ),
+              React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12 } },
+                React.createElement('thead', null,
+                  React.createElement('tr', { style: { borderBottom: '1px solid #333' } },
+                    ['Organ', 'Label', 'Volume cm³', 'Voxels'].map(h =>
+                      React.createElement('th', { key: h, style: { padding: '4px 8px', textAlign: 'left', color: '#aaa' } }, h)
+                    )
+                  )
+                ),
+                React.createElement('tbody', null,
+                  organs.map((o: any, i: number) =>
+                    React.createElement('tr', { key: i, style: { borderBottom: '1px solid #222', background: i % 2 === 0 ? '#1a1a2e' : 'transparent' } },
+                      React.createElement('td', { style: { padding: '3px 8px', fontFamily: 'monospace' } }, o.name),
+                      React.createElement('td', { style: { padding: '3px 8px', color: '#888' } }, o.label),
+                      React.createElement('td', { style: { padding: '3px 8px', fontWeight: 600 } }, o.volume_cm3),
+                      React.createElement('td', { style: { padding: '3px 8px', color: '#888' } }, o.voxels?.toLocaleString?.()),
+                    )
+                  )
+                )
+              ),
+            ),
+            containerClassName: 'min-w-[400px] p-4',
+            isDraggable: true,
+          });
+        }
+        // 调用 /segment_3d 渲染匹配器官的 3D mesh（缓存命中，仅生成 mesh，约 10s）
+        let csVp3d: any = null;
+        try {
+          // 先切到 3D 视口
+          let threeDProtocolId = '';
+          let threeDStageIdx = 0;
+          try {
+            const protocols: any[] = Array.from((hangingProtocolService as any).protocols?.values?.() ?? []);
+            const hp = protocols.find((hp: any) => {
+              const name = (hp.name || hp.id || '').toLowerCase();
+              return hp.isPreset && (name.includes('3donly') || name.includes('3d only') || name.includes('mprand3d'));
+            }) || protocols.find((hp: any) => {
+              const name = (hp.name || hp.id || '').toLowerCase();
+              return hp.isPreset && (name.includes('3d') || name.includes('volume'));
+            });
+            if (hp) {
+              threeDProtocolId = hp.id;
+              const stages = hp.stages || [];
+              for (let i = 0; i < stages.length; i++) {
+                if ((stages[i]?.viewportStructure?.viewports || []).some((v: any) =>
+                  (v.viewportOptions?.viewportType || '').includes('volume3d'))) {
+                  threeDStageIdx = i; break;
+                }
+              }
+            }
+          } catch(e) {}
+          if (threeDProtocolId) {
+            await commandsManager.runCommand('setHangingProtocol', { protocolId: threeDProtocolId, stageIndex: threeDStageIdx });
+          }
+
+          // 等 3D viewport
+          for (let attempt = 0; attempt < 20; attempt++) {
+            const vpMap = viewportGridService.getState().viewports as Map<string, any>;
+            for (const [id, vp] of vpMap.entries()) {
+              if ((vp?.viewportOptions?.viewportType || '') === 'volume3d') {
+                csVp3d = cornerstoneViewportService.getCornerstoneViewport(id) as any;
+                break;
+              }
+            }
+            if (csVp3d) break;
+            await new Promise(r => setTimeout(r, 800));
+          }
+
+          if (!csVp3d) { console.warn('[TotalSeg] No 3D viewport for mesh rendering'); }
+
+          const resp3d = await fetch('http://localhost:8004/segment_3d', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ series_instance_uid: seriesInstanceUID, organ_name: organName }),
+            signal: AbortSignal.timeout(180000),
+          });
+          if (!resp3d.ok) { console.warn('[TotalSeg] /segment_3d failed:', resp3d.status); }
+          else {
+            const data3d = await resp3d.json();
+            const meshes = data3d.meshes || [];
+
+            if (csVp3d) {
+              const renderer = csVp3d.getRenderer?.();
+              if (renderer) {
+                // 清除旧 mesh actors（避免切换器官时残留）
+                try {
+                  const oldActors = (renderer as any).getActors?.() ?? [];
+                  for (const a of oldActors) renderer.removeActor(a);
+                } catch(e) {}
+
+                // 用 vtk.js indexToWorld() 转换像素坐标→世界坐标
+                let imgData: any = null;
+                try {
+                  const volActor = (renderer as any).getVolumes?.()?.[0];
+                  if (volActor) {
+                    imgData = volActor.getMapper?.()?.getInputData?.();
+                  }
+                } catch(e) {}
+                const toWorld = imgData && typeof imgData.indexToWorld === 'function'
+                  ? (ijk: number[]) => imgData.indexToWorld(ijk)
+                  : (ijk: number[]) => ijk;
+
+                const ORGAN_COLORS_3D = [
+                  [0.90,0.30,0.30],[0.30,0.60,0.90],[0.30,0.80,0.40],[0.95,0.75,0.10],
+                  [0.70,0.30,0.90],[0.10,0.80,0.80],[1.00,0.50,0.00],[0.50,0.50,0.90],
+                  [0.90,0.40,0.70],[0.40,0.70,0.30],
+                ];
+
+                for (let mi = 0; mi < meshes.length; mi++) {
+                  const mesh = meshes[mi];
+                  const { vertices, faces } = mesh;
+                  if (vertices.length < 3 || faces.length < 3) continue;
+
+                  const physVerts = new Float32Array(vertices.length * 3);
+                  for (let i = 0; i < vertices.length; i++) {
+                    const world = toWorld([vertices[i][0], vertices[i][1], vertices[i][2]]);
+                    physVerts[i*3+0] = world[0];
+                    physVerts[i*3+1] = world[1];
+                    physVerts[i*3+2] = world[2];
+                  }
+                  const polydata = vtkPolyData.newInstance();
+                  polydata.getPoints().setData(physVerts, 3);
+                  const vtkFaces: number[] = [];
+                  for (const f of faces) vtkFaces.push(3, f[0], f[1], f[2]);
+                  polydata.getPolys().setData(new Uint32Array(vtkFaces));
+                  const mapper = vtkMapper.newInstance();
+                  mapper.setInputData(polydata);
+                  const actor = vtkActor.newInstance();
+                  actor.setMapper(mapper);
+                  const c = ORGAN_COLORS_3D[mi % ORGAN_COLORS_3D.length];
+                  actor.getProperty().setColor(c[0], c[1], c[2]);
+                  actor.getProperty().setOpacity(0.55);
+                  actor.getProperty().setEdgeVisibility(true);
+                  actor.getProperty().setEdgeColor(c[0]*0.5, c[1]*0.5, c[2]*0.5);
+                  renderer.addActor(actor);
+                }
+                csVp3d.render?.();
+                setTimeout(() => csVp3d.render?.(), 300);
+              }
+            }
+            console.log(`[TotalSeg] Rendered ${meshes.length} organ mesh(es) for "${organName}" in 3D`);
+          }
+        } catch (e3d: any) {
+          console.warn('[TotalSeg] 3D rendering failed:', e3d?.message);
+        }
+
+        uiNotificationService.show({ title: 'Segment Organ Done', message: `"${organName}": ${data.total_organs} result(s)`, type: 'success', duration: 6000 });
+
+      } catch (e: any) {
+        if (loadingId && uiModalService) { uiModalService.hide(loadingId); loadingId = null; }
+        uiNotificationService.show({ title: 'Segment Organ Error', message: e?.message || 'Failed', type: 'error', duration: 8000 });
+      }
+    },
+
+    // ── 框选分割：RectangleROI → 自动识别器官 → 3D Mesh ──
+    segmentByBBox: async () => {
+      const { activeViewportId } = viewportGridService.getState();
+      const csViewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId) as any;
+      if (!csViewport) { uiNotificationService.show({ title: 'Box Segment', message: 'No viewport', type: 'error' }); return; }
+
+      // 获取 SeriesInstanceUID
+      const vpEntry = viewportGridService.getState().viewports.get(activeViewportId);
+      const dsUID = vpEntry?.displaySetInstanceUIDs?.[0];
+      const ds = dsUID ? displaySetService.getDisplaySetByUID(dsUID) : null;
+      const seriesInstanceUID = (ds as any)?.SeriesInstanceUID;
+      if (!seriesInstanceUID) { uiNotificationService.show({ title: 'Box Segment', message: 'No DICOM loaded', type: 'error' }); return; }
+
+      // ── 确保有活跃分割（刷子需要用）──
+      let hasActiveSeg = false;
+      try {
+        const as = segmentationService.getActiveSegmentation(activeViewportId);
+        if (as?.segmentationId) hasActiveSeg = true;
+      } catch(e) {}
+      if (!hasActiveSeg) {
+        try { await _ensureActiveSegmentation(); } catch(e) { console.warn('[BoxSeg] auto-create seg failed:', e); }
+      }
+
+      // ── 检测选区：RectangleROI 或笔刷涂抹 ──
+      const allAnns = annotation.state.getAllAnnotations();
+      console.log('[BoxSeg] all annotations:', allAnns.length, allAnns.map((a:any) => a.metadata?.toolName));
+      const rectAnns = allAnns.filter((a: any) =>
+        ['RectangleROI', 'Rectangle', 'RectangleScissor'].includes(a.metadata?.toolName) &&
+        a.data?.handles?.points?.length >= 2
+      );
+      console.log('[BoxSeg] rectAnns:', rectAnns.length);
+
+      // 检查活跃分割 mask 的包围盒
+      let segBbox: number[] | null = null;
+      let segSliceIdx = 0;
+      try {
+        const as = segmentationService.getActiveSegmentation(activeViewportId);
+        console.log('[BoxSeg] activeSeg:', as?.segmentationId, 'segments:', as?.segments ? Object.keys(as.segments) : 'none');
+        if (as?.segmentationId) {
+          const { cache: csC } = await import('@cornerstonejs/core');
+          const { segmentation: csS, Enums: csEnums } = await import('@cornerstonejs/tools');
+          const so = csS.state.getSegmentation(as.segmentationId);
+          console.log('[BoxSeg] segObj keys:', so ? Object.keys(so) : 'null');
+          console.log('[BoxSeg] representationData keys:', so?.representationData ? Object.keys(so.representationData) : 'null');
+          // 尝试多种 representation 类型
+          const repKey = (csEnums as any).SegmentationRepresentations?.Labelmap || 'Labelmap';
+          const lm = so?.representationData?.[repKey] || so?.representationData?.['Labelmap'] || so?.representationData?.['LABELMAP'];
+          const lv = lm?.volumeId ? csC.getVolume(lm.volumeId) : null;
+          // 也检查 Stack 格式的 imageIds
+          const stackIds = (lm as any)?.imageIds as string[] | undefined;
+          if (!lv && !stackIds?.length) { console.log('[BoxSeg] no volumeId or imageIds'); return; }
+
+          let segData: Uint8Array | null = null;
+          let segW = 512, segH = 512;
+          if (lv) {
+            const [c2, r2] = lv.dimensions;
+            segData = lv.getScalarData() as Uint8Array; segW = c2; segH = r2;
+            const cs2 = (csViewport as any).getCurrentImageIdIndex?.() ?? 0;
+            const so2 = cs2 * c2 * r2;
+            let mnC = c2, mxC = 0, mnR = r2, mxR = 0;
+            for (let rr = 0; rr < r2; rr++)
+              for (let cc = 0; cc < c2; cc++)
+                if (segData[so2 + rr * c2 + cc] > 0) { if (cc < mnC) mnC = cc; if (cc > mxC) mxC = cc; if (rr < mnR) mnR = rr; if (rr > mxR) mxR = rr; }
+            if (mxC >= mnC && mxR >= mnR) { segBbox = [mnC, mnR, mxC + 1, mxR + 1]; segSliceIdx = cs2; }
+          } else if (stackIds?.length) {
+            const curSlice = (csViewport as any).getCurrentImageIdIndex?.() ?? 0;
+            const imgId = stackIds[curSlice];
+            if (imgId) {
+              const img = (csC as any).getImage(imgId);
+              segData = img?.getPixelData?.();
+              segW = img?.width || 512; segH = img?.height || 512;
+              if (segData) {
+                let mnC = segW, mxC = 0, mnR = segH, mxR = 0;
+                for (let rr = 0; rr < segH; rr++)
+                  for (let cc = 0; cc < segW; cc++)
+                    if (segData[rr * segW + cc] > 0) { if (cc < mnC) mnC = cc; if (cc > mxC) mxC = cc; if (rr < mnR) mnR = rr; if (rr > mxR) mxR = rr; }
+                if (mxC >= mnC && mxR >= mnR) { segBbox = [mnC, mnR, mxC + 1, mxR + 1]; segSliceIdx = curSlice; }
+              }
+            }
+          }
+          console.log(`[BoxSeg] result: segBbox=${segBbox ? segBbox.join(',') : 'null'}`);
+        }
+      } catch(e) { console.warn('[BoxSeg] seg check error:', e); }
+
+      if (!rectAnns.length && !segBbox) {
+        uiNotificationService.show({
+          title: 'Segment by Brush/Box',
+          message: 'Use RectangleROI tool or brush to mark a region on the current slice, then click Segment by Brush/Box again',
+          type: 'info', duration: 5000,
+        });
+        return;
+      }
+
+      // ── 确定 bbox（优先笔刷，其次 RectangleROI）──
+      let finalBbox: number[];
+      let sliceIdx: number;
+
+      if (segBbox) {
+        finalBbox = segBbox;
+        sliceIdx = segSliceIdx;
+      } else {
+        const ann = rectAnns[rectAnns.length - 1];
+        const imgData = csViewport.getImageData?.();
+        let originX = 0, originY = 0, spacingCol = 1, spacingRow = 1;
+        if (imgData?.origin && imgData?.spacing) {
+          originX = imgData.origin[0] ?? 0; originY = imgData.origin[1] ?? 0;
+          spacingCol = imgData.spacing[1] ?? 1; spacingRow = imgData.spacing[0] ?? 1;
+        }
+        const pts = ann.data.handles.points.map((p: any) => [
+          Math.round((p[0] - originX) / Math.max(1e-6, spacingCol)),
+          Math.round((p[1] - originY) / Math.max(1e-6, spacingRow)),
+        ]);
+        finalBbox = [Math.min(pts[0][0], pts[1][0]), Math.min(pts[0][1], pts[1][1]),
+                      Math.max(pts[0][0], pts[1][0]), Math.max(pts[0][1], pts[1][1])];
+        sliceIdx = (csViewport as any).getCurrentImageIdIndex?.() ?? 0;
+      }
+
+      // 调用后端
+      uiNotificationService.show({ title: 'Box Segment', message: `Analyzing bbox [${finalBbox.join(',')}]...`, type: 'info', duration: 3000 });
+      try {
+        const resp = await fetch('http://localhost:8004/segment_by_bbox', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ series_instance_uid: seriesInstanceUID, bbox: finalBbox, slice_idx: sliceIdx }),
+          signal: AbortSignal.timeout(600000),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        let meshes = data.meshes || [];
+
+        // 同时查病灶（并行请求）
+        let lesionMeshes: any[] = [];
+        try {
+          const lr = await fetch('http://localhost:8004/segment_lesion', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ series_instance_uid: seriesInstanceUID, bbox: finalBbox, slice_idx: sliceIdx }),
+            signal: AbortSignal.timeout(600000),
+          });
+          if (lr.ok) {
+            const ld = await lr.json();
+            lesionMeshes = ld.meshes || [];
+            if (lesionMeshes.length) meshes = [...meshes, ...lesionMeshes];
+          }
+        } catch(e) { console.warn('[BoxSeg] lesion check failed:', e); }
+
+        if (!meshes.length) { uiNotificationService.show({ title: 'Box Segment', message: 'No organs or lesions in box', type: 'warning' }); return; }
+
+        // 切换到 3D 并渲染
+        let threeDProtocolId = '';
+        try {
+          const protocols: any[] = Array.from((hangingProtocolService as any).protocols?.values?.() ?? []);
+          const hp = protocols.find((hp: any) => {
+            const name = (hp.name || hp.id || '').toLowerCase();
+            return hp.isPreset && (name.includes('3donly') || name.includes('3d only') || name.includes('mprand3d'));
+          }) || protocols.find((hp: any) => (hp.name || hp.id || '').toLowerCase().includes('3d'));
+          if (hp) { threeDProtocolId = hp.id; }
+        } catch(e) {}
+        if (threeDProtocolId) { await commandsManager.runCommand('setHangingProtocol', { protocolId: threeDProtocolId, stageIndex: 0 }); }
+
+        let csVp3d: any = null;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          for (const [id, vp] of viewportGridService.getState().viewports.entries()) {
+            if ((vp?.viewportOptions?.viewportType || '') === 'volume3d') { csVp3d = cornerstoneViewportService.getCornerstoneViewport(id) as any; break; }
+          }
+          if (csVp3d) break;
+          await new Promise(r => setTimeout(r, 800));
+        }
+        if (!csVp3d) { console.warn('[BoxSeg] No 3D viewport'); return; }
+
+        const renderer = csVp3d.getRenderer?.();
+        if (!renderer) return;
+        try { const oldActors = (renderer as any).getActors?.() ?? []; for (const a of oldActors) renderer.removeActor(a); } catch(e) {}
+
+        let imgDataVtk: any = null;
+        try { const va = (renderer as any).getVolumes?.()?.[0]; if (va) imgDataVtk = va.getMapper?.()?.getInputData?.(); } catch(e) {}
+        const toWorld = imgDataVtk && typeof imgDataVtk.indexToWorld === 'function' ? (ijk: number[]) => imgDataVtk.indexToWorld(ijk) : (ijk: number[]) => ijk;
+
+        const COLORS = [[0.9,0.3,0.3],[0.3,0.6,0.9],[0.3,0.8,0.4],[0.95,0.75,0.1],[0.7,0.3,0.9],[0.1,0.8,0.8],[1,0.5,0],[0.5,0.5,0.9],[0.9,0.4,0.7],[0.4,0.7,0.3]];
+        const organActors = new Map<string, any>();
+        const organColors = new Map<string, number[]>();
+
+        for (let mi = 0; mi < meshes.length; mi++) {
+          const m = meshes[mi];
+          const { vertices, faces } = m;
+          if (vertices.length < 3 || faces.length < 3) continue;
+          const physVerts = new Float32Array(vertices.length * 3);
+          for (let i = 0; i < vertices.length; i++) { const w = toWorld([vertices[i][0], vertices[i][1], vertices[i][2]]); physVerts[i*3]=w[0]; physVerts[i*3+1]=w[1]; physVerts[i*3+2]=w[2]; }
+          const pd = vtkPolyData.newInstance(); pd.getPoints().setData(physVerts, 3);
+          const vf: number[] = []; for (const f of faces) vf.push(3, f[0], f[1], f[2]); pd.getPolys().setData(new Uint32Array(vf));
+          const mp = vtkMapper.newInstance(); mp.setInputData(pd);
+          const ac = vtkActor.newInstance(); ac.setMapper(mp);
+          const c = COLORS[mi % COLORS.length];
+          ac.getProperty().setColor(c[0], c[1], c[2]); ac.getProperty().setOpacity(0.55);
+          ac.getProperty().setEdgeVisibility(true); ac.getProperty().setEdgeColor(c[0]*0.5, c[1]*0.5, c[2]*0.5);
+          renderer.addActor(ac);
+          organActors.set(m.name, ac); organColors.set(m.name, c);
+        }
+        csVp3d.render?.();
+
+        // 显示器官面板（复用 existing pattern）
+        if (organActors.size > 0) {
+          const showPanel = () => {
+            const old = document.getElementById('totalSeg-organ-panel'); if (old) old.remove();
+            const pel = document.createElement('div'); pel.id = 'totalSeg-organ-panel';
+            Object.assign(pel.style, { position:'fixed', left:'8px', top:'60px', zIndex:'9999', background:'rgba(15,15,25,0.92)', border:'1px solid rgba(255,255,255,0.15)', borderRadius:'8px', minWidth:'200px', maxWidth:'240px', maxHeight:'calc(100vh - 120px)', overflow:'hidden', display:'flex', flexDirection:'column', fontSize:'12px', color:'#ccc' });
+            document.body.appendChild(pel);
+            const vis = new Map<string,boolean>(); organActors.forEach((_,n) => vis.set(n, true));
+            const render = () => {
+              const vc = Array.from(vis.values()).filter(v=>v).length;
+              let h = `<div style="padding:6px 10px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);cursor:move"><span style="font-weight:600;font-size:13px;color:#e5e7eb">Box (${vc}/${organActors.size})</span><button style="background:none;border:none;color:#888;font-size:16px;cursor:pointer" onclick="this.closest('#totalSeg-organ-panel').remove()">×</button></div><div style="overflow-y:auto;max-height:calc(100vh-200px)">`;
+              organActors.forEach((_, name) => {
+                const c = organColors.get(name) || [0.5,0.5,0.5]; const v = vis.get(name)!;
+                h += `<div style="display:flex;align-items:center;gap:8px;padding:3px 10px;cursor:pointer;${v?'background:rgba(255,255,255,0.05)':''}" onclick="var a=document.getElementById('totalSeg-organ-panel')._actors.get('${name}'); if(a){var nv=!a.getVisibility();a.setVisibility(nv);document.getElementById('totalSeg-organ-panel')._vis.set('${name}',nv);document.getElementById('totalSeg-organ-panel')._render();}"><span style="width:10px;height:10px;border-radius:2px;background:rgb(${Math.round(c[0]*255)},${Math.round(c[1]*255)},${Math.round(c[2]*255)});opacity:${v?1:0.25}"></span><span style="font-family:monospace;font-size:11px;opacity:${v?1:0.35}">${name}</span>${v?'':'<span style="font-size:10px;color:#555;margin-left:auto">off</span>'}</div>`;
+              });
+              h += '</div>'; pel.innerHTML = h;
+              const hdr = pel.querySelector('.organ-panel-header, div[style*="cursor:move"]');
+              if (hdr) { let d=false, sx=0, sy=0, px=0, py=0; hdr.addEventListener('mousedown',(e:any)=>{d=true;sx=e.clientX;sy=e.clientY;px=pel.offsetLeft;py=pel.offsetTop}); document.addEventListener('mousemove',(e:any)=>{if(!d)return;pel.style.left=(px+e.clientX-sx)+'px';pel.style.top=(py+e.clientY-sy)+'px'}); document.addEventListener('mouseup',()=>{d=false}); }
+            };
+            (pel as any)._actors = organActors; (pel as any)._vis = vis; (pel as any)._render = () => { render(); csVp3d?.render?.(); }; render();
+          };
+          showPanel();
+        }
+
+        // 缓存结果供报告生成
+        _lastTotalSegResult = {
+          meshes,
+          organs: meshes.filter((m: any) => !m.name.startsWith('lesion_')).map((m: any) => ({ name: m.name, volume_cm3: m.volume_cm3 || 0, label: m.label })),
+          lesions: lesionMeshes.map((m: any) => ({ name: m.name, volume_cm3: m.volume_cm3 || 0, label: m.label })),
+          screenshot3DBase64: '',
+        };
+
+        uiNotificationService.show({ title: 'Box Segment Done', message: `${meshes.length} organs found`, type: 'success' });
+      } catch (e: any) { uiNotificationService.show({ title: 'Box Segment Error', message: e?.message || 'Failed', type: 'error' }); }
+    },
+
+    // ── 放射报告生成 ──
+    generateReport: async () => {
+      const { uiModalService } = servicesManager.services;
+
+      if (!_lastTotalSegResult || !_lastTotalSegResult.meshes.length) {
+        uiNotificationService.show({
+          title: 'Generate Report',
+          message: 'Please run segmentation first (Segment All Organs or Segment by Brush/Box).',
+          type: 'warning', duration: 5000,
+        });
+        return;
+      }
+
+      // 自动截图当前 3D 视图
+      const screenshot = capture3DScreenshot(servicesManager);
+
+      // 显示临床表单弹窗
+      showClinicalFormModal(uiModalService, servicesManager, screenshot);
+    },
+
     showUnSAMUploadModal: async () => {
       const { activeViewportId } = viewportGridService.getState();
 
@@ -5547,6 +6913,18 @@ function commandsModule({
     },
     generateAIReport: {
       commandFn: actions.generateAIReport,
+    },
+    totalSegmentAll: {
+      commandFn: actions.totalSegmentAll,
+    },
+    segmentOrganByName: {
+      commandFn: actions.segmentOrganByName,
+    },
+    segmentByBBox: {
+      commandFn: actions.segmentByBBox,
+    },
+    generateReport: {
+      commandFn: actions.generateReport,
     },
     preloadSAMEmbeddings: {
       commandFn: actions.preloadSAMEmbeddings,

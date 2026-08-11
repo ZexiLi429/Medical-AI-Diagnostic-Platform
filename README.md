@@ -1,209 +1,134 @@
-# CT Analysis Platform — Multi-Agent Diagnostic System
+<div align="center">
 
-https://github.com/ZexiLi429/Medical-AI-Diagnostic-Platform/blob/master/demo.mp4
+# 🏥 Medical AI Diagnostic Platform
 
-> **Dissertation Project**: Computer-aided CT analysis platform integrating real-time 3D visualisation, multi-organ segmentation, box-guided lesion detection, and LLM-powered diagnostic report generation.
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-009688)](https://fastapi.tiangolo.com)
+[![Docker](https://img.shields.io/badge/Docker-24.0%2B-2496ED)](https://docker.com)
+[![TotalSegmentator](https://img.shields.io/badge/TotalSegmentator-v2_117--class-orange)](https://github.com/wasserth/TotalSegmentator)
+[![LLM](https://img.shields.io/badge/LLM-Llama_3.3_70B-purple)](https://groq.com)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+**Computer-Aided CT Analysis with Real-Time 3D Visualisation & Multi-Agent Report Generation**
+
+</div>
 
 ---
 
-## Architecture
+<a href="https://github.com/ZexiLi429/Medical-AI-Diagnostic-Platform/blob/master/demo.mp4">
+  <img src="demo.png" alt="Demo Video" width="100%">
+</a>
+<p align="center"><em>👆 Click the image to watch the demo video</em></p>
+
+---
+
+## 🧠 Overview
+
+A dissertation platform integrating **117-class anatomical segmentation**, **box-guided lesion detection** (liver / lung / kidney), and **LLM-powered diagnostic report generation** into a unified CT analysis workflow. Designed for CPU-only deployment with adaptive Z-axis downsampling and dual-level inference caching.
+
+## 🏗 Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  OHIF/vtk.js Frontend (port 3000)                   │
-│  • 2D MPR viewer + 3D volume rendering              │
-│  • Semi-transparent organ meshes                    │
-│  • Box-select lesion ROI                            │
-├─────────────────────────────────────────────────────┤
-│  FastAPI Backend (port 8004)                        │
-│  • TotalSegmentator orchestration                   │
-│  • MedSAM2 interactive refinement                   │
-│  • Groq-hosted Llama 3.3 70B (report generation)    │
-│  • Dual-level caching (organ + lesion)              │
-├─────────────────────────────────────────────────────┤
-│  Docker Containers                                  │
-│  • TotalSegmentator v2 (117-class nnU-Net v2)       │
-│  • Orthanc PACS (port 8042)                         │
-│  • MedSAM2 (port 8003, interactive lesion seg)      │
-└─────────────────────────────────────────────────────┘
+OHIF/vtk.js Frontend (:3000)     ← 2D MPR + 3D Volume Rendering + Organ Meshes
+        │
+FastAPI Backend (:8004)          ← Orchestration · Caching · Coordinate Recovery
+        │
+   ┌────┼────┐
+   ▼    ▼     ▼
+Docker: TotalSegmentator v2 (117 organs + 3 lesion models)
+Docker: Orthanc PACS (:8042)
+Docker: MedSAM2 (:8003, interactive refinement)
+        │
+   Groq API → Llama 3.3 70B      ← Diagnostic Report Generation
 ```
 
-## Features
+## ✨ Features
 
-| Feature | Description |
-|---------|-------------|
-| **Multi-organ Segmentation** | 117 anatomical structures via TotalSegmentator v2 |
-| **Semantic Organ Queries** | Natural-language organ lookup (e.g. `"left lung"`, `"rib"`) |
-| **Lesion Detection** | Box-guided: liver lesions, lung nodules, kidney cysts |
-| **3D Visualisation** | vtk.js volume rendering with organ mesh overlay |
-| **Diagnostic Reports** | Three-agent LLM workflow (Analysis → Evaluation → Generation) |
-| **CPU-only Operation** | Adaptive Z-axis downsampling, dual-level caching |
+| Category | Capability |
+|----------|------------|
+| 🔬 **Segmentation** | 117 anatomical structures via TotalSegmentator v2 |
+| 🎯 **Lesion Detection** | Box-guided: liver lesions · lung nodules · kidney cysts |
+| 🗣 **Semantic Queries** | Natural-language organ lookup (`"left lung"`, `"rib"`) |
+| 🩻 **3D Visualisation** | vtk.js volume rendering with semi-transparent organ meshes |
+| 📝 **Report Generation** | Three-agent workflow: Analysis → Evaluation → Generation |
+| ⚡ **Performance** | Adaptive Z downsampling · Dual-level cache · CPU-only |
 
----
+## 🚀 Quick Start
 
-## Prerequisites
+### Prerequisites
 
-| Component | Version | Notes |
-|-----------|---------|-------|
-| **Python** | 3.10+ | Backend service |
-| **Docker** | 24.0+ | TotalSegmentator + Orthanc + MedSAM2 |
-| **Node.js** | 18+ | OHIF frontend |
-| **Groq API Key** | Free tier | For LLM report generation |
+- **Python 3.10+** · **Docker 24.0+** · **Node.js 18+**
+- **Groq API key** ([free tier](https://console.groq.com))
 
----
-
-## Docker Setup
-
-### 1. TotalSegmentator
+### 1. Docker Containers
 
 ```bash
+# Orthanc PACS
+docker run -d --name orthanc --network=host jodogne/orthanc-plugins
+
+# TotalSegmentator (auto-pulled by backend on first use)
 docker pull wasserth/totalsegmentator:latest
 ```
 
-Uses `--network=host` mode. The backend auto-pulls the image on first use if not present.
-
-### 2. Orthanc PACS
+### 2. Backend
 
 ```bash
-docker run -d --name orthanc --network=host \
-  -v orthanc_data:/var/lib/orthanc/db \
-  jodogne/orthanc-plugins
-```
-
-Access at http://localhost:8042
-
-### 3. MedSAM2 (optional, for interactive lesion refinement)
-
-```bash
-docker run -d --name medsam2 --network=host \
-  -v ./MedSAM2:/workspace \
-  medsam2:latest
-```
-
----
-
-## Quick Start
-
-### 1. Clone & Setup
-
-```bash
-git clone https://github.com/YOUR_USERNAME/CT-Analysis-Platform.git
-cd CT-Analysis-Platform
-
-# Create virtual environment
-python -m venv .venv
-.venv\Scripts\activate   # Windows
-# source .venv/bin/activate  # Linux/macOS
-
+python -m venv .venv && .venv\Scripts\activate
 pip install -r requirements.txt
+set GROQ_API_KEY=gsk_your_key
+python totalseg_service.py          # → http://localhost:8004
 ```
 
-### 2. Configuration
-
-```bash
-# Set Groq API key (free tier available at console.groq.com)
-set GROQ_API_KEY=gsk_your_key_here
-```
-
-No other configuration needed — all defaults are pre-set for local development.
-
-### 3. Start Docker Containers
-
-```bash
-# Orthanc PACS (required)
-docker run -d --name orthanc --network=host jodogne/orthanc-plugins
-
-# TotalSegmentator (auto-pulled by backend on first request)
-# No manual start needed — the backend issues docker run on-demand
-```
-
-### 4. Start Backend
-
-```bash
-python totalseg_service.py
-```
-
-Backend starts at **http://localhost:8004**. Verify:
-
-```bash
-curl http://localhost:8004/health
-# {"status": "ok"}
-```
-
-### 5. Start Frontend (OHIF)
+### 3. Frontend
 
 ```bash
 cd miscada-project-master
-yarn install
-yarn start
+yarn install && yarn start          # → http://localhost:3000
 ```
 
-Frontend at **http://localhost:3000**
+### 4. Load Data
 
-### 6. Load DICOM Data
+Upload DICOM to Orthanc (`:8042`) → open OHIF (`:3000`) → segmentation triggers automatically.
 
-Upload DICOM files to Orthanc (port 8042), then open the OHIF viewer. The platform auto-detects the study and triggers segmentation on first view.
-
----
-
-## API Endpoints (port 8004)
+## 📡 API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/segment_3d` | Full 117-organ segmentation → 3D meshes |
-| `POST` | `/segment_by_name` | Query-specific organ (e.g. `"liver"`, `"left lung"`) |
+| `POST` | `/segment_3d` | 117-organ segmentation → 3D meshes |
+| `POST` | `/segment_by_name` | Query-specific organ (`"liver"`, `"left lung"`) |
 | `POST` | `/segment_file` | Segment a NIfTI file directly |
-| `POST` | `/segment_lesion` | Box-guided lesion detection (liver/lung/kidney) |
-| `POST` | `/analyze_lesions` | LLM analysis: which organs likely contain lesions |
-| `POST` | `/generate_report` | Full diagnostic report generation |
+| `POST` | `/segment_lesion` | Box-guided lesion detection |
+| `POST` | `/analyze_lesions` | LLM: identify suspicious organs |
+| `POST` | `/generate_report` | Full diagnostic report |
 | `GET` | `/health` | Health check |
 
----
+## 📊 Key Results
 
-## Key Results
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Processing Time | 1.3–5.8 min | 5 Orthanc cases, ≤400 slices |
+| Kidney Dice | 0.76 ± 0.14 | KiTS19 NIfTI, provenance-matched GT |
+| Coordinate Alignment | 0.00 mm origin delta | TS mesh ↔ DICOM world |
+| Organ Classes | 117 | TotalSegmentator v2 |
+| Lesion Models | 3 | Liver · Lung · Kidney |
 
-| Metric | Value | Context |
-|--------|-------|---------|
-| **Segmentation Time** | 1.3–5.8 min | 5 Orthanc cases, 400-slice limit |
-| **Kidney Dice** | 0.76 ± 0.14 | 5 KiTS19 NIfTI volumes, provenance-matched GT |
-| **Coordinate Alignment** | 0.00 mm origin delta | TS mesh vs DICOM world coords |
-| **Organ Classes** | 117 | TotalSegmentator v2 via Docker |
-| **Lesion Types** | 3 | Liver lesions, lung nodules, kidney cysts |
+→ Full data: [`result/experiment_results/`](result/experiment_results/)
 
-Full experimental data: [`result/experiment_results/`](result/experiment_results/)
-
----
-
-## Project Structure
+## 📁 Structure
 
 ```
-├── totalseg_service.py      # Main backend (FastAPI, port 8004)
+├── totalseg_service.py      # FastAPI backend (port 8004)
+├── demo.mp4 / demo.png      # Demo media
 ├── service/                 # Deployed service copy
 ├── test/                    # Experiment & evaluation scripts
 ├── figures/                 # Thesis figure generation
 ├── result/                  # Experimental results (JSON, CSV, NPY)
-├── data/                    # Dataset utilities
-├── legacy/                  # Deprecated debug scripts
+├── data/                    # Dataset download & lookup utilities
+├── legacy/                  # Deprecated scripts
 ├── miscada-project-master/  # OHIF vtk.js frontend
 ├── MedSAM2/                 # MedSAM2 inference + report agent
-├── MedSAM-LiteMedSAM/       # LiteMedSAM models
 ├── MedSAM-main/             # MedSAM v1
-└── demo.mp4                 # Demo video
-```
-
----
-
-## Citation
-
-If you use this work, please cite:
-
-```bibtex
-@mastersthesis{miscada2025,
-  title  = {Computer-Aided CT Analysis Platform with Multi-Agent Diagnostic Report Generation},
-  author = {Your Name},
-  school = {Your University},
-  year   = {2025}
-}
+└── MedSAM-LiteMedSAM/       # LiteMedSAM models
 ```
 
 ## License

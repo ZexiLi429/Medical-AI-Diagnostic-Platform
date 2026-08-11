@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>3D Mesh Test</title>
+<style>body{margin:0;background:#000;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif}</style>
+</head><body>
+<div id="msg" style="color:#fff;position:fixed;top:10px;z-index:1">Loading Three.js...</div>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+document.getElementById('msg').textContent = 'THREE loaded, creating mesh...';
+
+const canvas = document.createElement('canvas');
+canvas.width = 800; canvas.height = 600;
+document.body.appendChild(canvas);
+
+// alpha:false context
+canvas.getContext('webgl2', { alpha: false, premultipliedAlpha: false, antialias: true });
+
+// 生成测试 ellipsoid mesh
+const verts = [], faces = [];
+const cx=220,cy=200,cz=115,rx=50,ry=40,rz=35,ls=30;
+for (let i=0;i<=ls;i++){const lat=Math.PI*(-0.5+i/ls);
+  for (let j=0;j<=ls;j++){const lon=2*Math.PI*j/ls;
+    verts.push([cx+rx*Math.cos(lat)*Math.cos(lon),cy+ry*Math.cos(lat)*Math.sin(lon),cz+rz*Math.sin(lat)]);}}
+for (let i=0;i<ls;i++){for (let j=0;j<ls;j++){const a=i*(ls+1)+j,b=a+ls+1;faces.push([a,b,a+1]);faces.push([b,b+1,a+1]);}}
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 10000);
+cam.position.set(300, 200, 400);
+cam.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, premultipliedAlpha: false });
+renderer.setSize(800, 600);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x1a1a2e, 1);
+
+scene.add(new THREE.AmbientLight(0x404060, 2.5));
+const sun = new THREE.DirectionalLight(0xffffff, 3); sun.position.set(1, 1, 1); scene.add(sun);
+const fill = new THREE.DirectionalLight(0x88aaff, 1.5); fill.position.set(-1, -0.5, -0.5); scene.add(fill);
+
+const pos = [], idx = [];
+let sx=0,sy=0,sz=0;
+verts.forEach(v=>{sx+=v[0];sy+=v[1];sz+=v[2];});
+const mc=[sx/verts.length,sy/verts.length,sz/verts.length];
+verts.forEach(v=>pos.push(v[0]-mc[0],v[1]-mc[1],v[2]-mc[2]));
+for (const f of faces) if(f.length>=3) idx.push(f[0],f[1],f[2]);
+
+const geo = new THREE.BufferGeometry();
+geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+geo.setIndex(idx);
+geo.computeVertexNormals();
+
+// Green semi-transparent mesh + wireframe
+scene.add(new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
+  color: 0x22c55e, specular: 0x44ff88, shininess: 40,
+  transparent: true, opacity: 0.70, side: THREE.DoubleSide
+})));
+scene.add(new THREE.LineSegments(
+  new THREE.WireframeGeometry(geo),
+  new THREE.LineBasicMaterial({ color: 0x16a34a, transparent: true, opacity: 0.3 })
+));
+
+const controls = new OrbitControls(cam, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(0, 0, 0);
+controls.update();
+
+// 验证渲染
+renderer.render(scene, cam);
+const gl = canvas.getContext('webgl2');
+const px = new Uint8Array(4);
+gl.readPixels(400, 300, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+document.getElementById('msg').textContent = 'Center pixel: R=' + px[0] + ' G=' + px[1] + ' B=' + px[2] + ' A=' + px[3] + ' | Drag to rotate, scroll to zoom';
+
+// 动画循环
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, cam);
+}
+animate();
+</script>
+</body></html>

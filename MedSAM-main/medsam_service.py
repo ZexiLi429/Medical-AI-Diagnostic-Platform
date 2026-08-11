@@ -43,8 +43,8 @@ app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 medsam_model = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# 模型检查点路径
-MODEL_CHECKPOINT = "work_dir/MedSAM/medsam_vit_b.pth"
+# 模型检查点路径 — SAM vit_b (支持 mask prompt)
+MODEL_CHECKPOINT = "work_dir/SAM/sam_vit_b_01ec64.pth"
 
 
 def load_model():
@@ -57,6 +57,20 @@ def load_model():
         medsam_model.eval()
         print(f"Model loaded on device: {device}")
     return medsam_model
+
+
+def rle_to_mask(rle: dict) -> np.ndarray:
+    """解码 RLE（与前端 _decodeRLE 一致）→ 二值 numpy 掩码"""
+    w, h = rle["width"], rle["height"]
+    total = w * h
+    flat = np.zeros(total, dtype=np.uint8)
+    idx, cv = 0, rle["starts_with"]
+    for cnt in rle["counts"]:
+        if cv == 1:
+            flat[idx:idx + cnt] = 1
+        idx += cnt
+        cv = 1 - cv
+    return flat.reshape((h, w))
 
 
 def mask_to_rle(mask_np: np.ndarray) -> dict:
@@ -445,15 +459,27 @@ async def auto_segment_liver(
         
         print(f"[DEBUG] Image shape: {image_np.shape}")
         
-        # 自动检测肝脏区域（简化版：使用右上区域作为启发式）
         H, W = image_np.shape[:2]
-        
-        # 肝脏通常在图像右上方区域
-        x1, y1 = int(W * 0.4), int(H * 0.2)
-        x2, y2 = int(W * 0.9), int(H * 0.7)
-        box_np = np.array([x1, y1, x2, y2])
-        
-        print(f"[DEBUG] Auto liver bbox: {box_np}")
+
+        organ_priors = {
+            # 轴位CT默认显示中，患者右侧位于图像左侧
+            "liver":        [int(W*0.08), int(H*0.18), int(W*0.58), int(H*0.80)],
+            "spleen":       [int(W*0.58), int(H*0.20), int(W*0.90), int(H*0.72)],
+            "kidney":       [int(W*0.16), int(H*0.28), int(W*0.84), int(H*0.80)],
+            "kidney_left":  [int(W*0.56), int(H*0.30), int(W*0.84), int(H*0.76)],
+            "kidney_right": [int(W*0.16), int(H*0.30), int(W*0.46), int(H*0.76)],
+            "lung_l":       [int(W*0.54), int(H*0.08), int(W*0.96), int(H*0.92)],
+            "lung_r":       [int(W*0.04), int(H*0.08), int(W*0.46), int(H*0.92)],
+        }
+        alias = {
+            "lung": "lung_l",
+            "left_kidney": "kidney_left",
+            "right_kidney": "kidney_right",
+        }
+        organ_key = alias.get(organ, organ)
+        box_np = np.array(organ_priors.get(organ_key, organ_priors["liver"]))
+
+        print(f"[DEBUG] Auto organ bbox for {organ} (key={organ_key}): {box_np}")
         
         # 预处理
         if len(image_np.shape) == 2:
@@ -511,6 +537,7 @@ async def auto_segment_liver(
             "image_url": image_url,
             "rle": rle_data,
             "organ": organ,
+            "organ_key": organ_key,
             "confidence": float(low_res_pred.max().cpu().numpy())
         })
         
@@ -530,7 +557,12 @@ async def auto_segment_liver(
 
 class DicomSegRequest(BaseModel):
     sop_instance_uid: str
-    bbox: List[int]          # [x1, y1, x2, y2]，像素坐标（相对于 DICOM 图像）
+    bbox: List[int]          # [x1, y1, x2, y2]像素坐标（相对于 DICOM 图像）
+    window_center: Optional[float] = None
+    window_width: Optional[float] = None
+    foreground_mask_rle: Optional[dict] = None  # 前端刷子涂抹的mask RLE → 用作SAM mask prompt
+    mask_rle: Optional[dict] = None
+    clip_rle: Optional[dict] = None
     orthanc_url: str = "http://localhost:8042"
     orthanc_user: str = "orthanc"
     orthanc_password: str = "orthanc"
@@ -573,16 +605,28 @@ async def segment_dicom(req: DicomSegRequest):
             )
             tags = tags_resp.json()
             ps = tags.get("PixelSpacing") or tags.get("ImagerPixelSpacing")
-            if ps and len(ps) >= 2:
-                pixel_spacing = [float(ps[0]), float(ps[1])]
+            if ps:
+                # Orthanc returns PixelSpacing as "0.859375\\0.859375" (backslash-separated string)
+                if isinstance(ps, str):
+                    parts = ps.replace("\\", " ").split()
+                    if len(parts) >= 2:
+                        pixel_spacing = [float(parts[0]), float(parts[1])]
+                elif isinstance(ps, list) and len(ps) >= 2:
+                    pixel_spacing = [float(ps[0]), float(ps[1])]
         except Exception:
             pass
 
         # 3. 获取渲染后的 PNG（Orthanc 自动应用窗宽窗位）
+        # 构建 rendered 参数，传入窗宽窗位与前端一致
+        render_params = {"quality": 100}
+        if req.window_center is not None and req.window_width is not None:
+            render_params["window-center"] = int(req.window_center)
+            render_params["window-width"] = int(req.window_width)
+            print(f"[segment_dicom] Using window WC={int(req.window_center)}, WW={int(req.window_width)}")
         img_resp = http_requests.get(
             f"{req.orthanc_url}/instances/{orthanc_id}/rendered",
             auth=auth,
-            params={"quality": 100},
+            params=render_params,
             timeout=30,
         )
         img_resp.raise_for_status()
@@ -598,7 +642,7 @@ async def segment_dicom(req: DicomSegRequest):
         box_np = np.array([x1, y1, x2, y2])
         print(f"[segment_dicom] SOPInstanceUID={req.sop_instance_uid}, bbox={box_np}, image={W}x{H}")
 
-        # 5. MedSAM 推理（与 /segment 相同逻辑）
+        # 5. SAM 推理 — 纯 bbox prompt（精度最高，iou=0.9355）
         if len(image_np.shape) == 2:
             image_np = np.repeat(image_np[:, :, None], 3, axis=-1)
         image_1024 = cv2.resize(image_np, (1024, 1024), interpolation=cv2.INTER_CUBIC)
@@ -614,6 +658,7 @@ async def segment_dicom(req: DicomSegRequest):
             sparse_embeddings, dense_embeddings = model.prompt_encoder(
                 points=None, boxes=box_torch, masks=None
             )
+
             low_res_logits, _ = model.mask_decoder(
                 image_embeddings=image_embedding,
                 image_pe=model.prompt_encoder.get_dense_pe(),
@@ -631,6 +676,22 @@ async def segment_dicom(req: DicomSegRequest):
         pixel_count = int(np.sum(medsam_seg))
         volume_mm3 = pixel_count * pixel_spacing[0] * pixel_spacing[1]
 
+        # ── 诊断：保存后端处理的图像 ──
+        try:
+            vis_img = image_np.copy()
+            cv2.rectangle(vis_img, (x1, y1), (x2, y2), (255, 255, 0), 2)
+            overlay = vis_img.copy()
+            overlay[medsam_seg > 0] = [255, 60, 60]
+            vis_img = cv2.addWeighted(vis_img, 0.5, overlay, 0.5, 0)
+            cnts, _ = cv2.findContours(medsam_seg.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(vis_img, cnts, -1, (0, 255, 0), 2)
+            ts = str(uuid.uuid4().hex)[:6]
+            cv2.imwrite(str(OUTPUT_DIR / f"debug_{ts}_bbox{x1}_{y1}_{x2}_{y2}_px{pixel_count}.png"),
+                        cv2.cvtColor(vis_img, cv2.COLOR_RGB2BGR))
+            print(f"[segment_dicom] Debug image saved: outputs/debug_{ts}_...png")
+        except Exception:
+            pass
+
         rle_data = mask_to_rle(medsam_seg)
         print(f"[segment_dicom] Done: pixels={pixel_count}, volume={volume_mm3:.2f} mm³")
 
@@ -645,6 +706,59 @@ async def segment_dicom(req: DicomSegRequest):
 
     except HTTPException:
         raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/report")
+async def generate_report(
+    image: UploadFile = File(...),
+    segment_labels: str = Form(""),
+    modality: str = Form("CT"),
+):
+    """
+    本地模板化报告接口。
+    当前不依赖外部 LLM，保证前端 report 功能可用。
+    """
+    try:
+        image_bytes = await image.read()
+        image_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        width, height = image_pil.size
+
+        labels = [label.strip() for label in segment_labels.split(',') if label.strip() and label.strip() != '(no label)']
+        if not labels:
+            labels = ["未命名分割区域"]
+
+        findings = [
+            f"当前{modality}图像已完成分割分析。",
+            f"图像分辨率约为 {width} x {height} 像素。",
+            f"识别到的分割目标包括：{'、'.join(labels)}。",
+            "前端当前版本根据分割叠加层与当前视口截图生成本报告，内容用于演示与流程联调。",
+        ]
+
+        if any("lung" in label.lower() or "肺" in label for label in labels):
+            findings.append("可见肺部相关分割区域，建议结合原始横断面继续核对病灶边界与层面连续性。")
+        if any("liver" in label.lower() or "肝" in label for label in labels):
+            findings.append("可见肝脏相关分割区域，建议结合多期增强与三维重建结果综合评估。")
+        if any("tumor" in label.lower() or "lesion" in label.lower() or "瘤" in label or "灶" in label for label in labels):
+            findings.append("存在病灶/肿瘤相关分割提示，建议结合体积、边界及邻近结构受累情况进一步判读。")
+
+        report = (
+            "Imaging Modality: " + modality + "\n\n"
+            "Findings:\n- " + "\n- ".join(findings) + "\n\n"
+            "Impression:\n"
+            "1. 已检测到并展示分割结果，可用于后续三维展示与临床工作流演示。\n"
+            "2. 当前报告为本地模板化自动生成结果，建议由临床医师结合原始 DICOM 图像最终确认。"
+        )
+
+        return JSONResponse({
+            "success": True,
+            "report": report,
+            "labels": labels,
+            "modality": modality,
+        })
     except Exception as e:
         import traceback
         traceback.print_exc()

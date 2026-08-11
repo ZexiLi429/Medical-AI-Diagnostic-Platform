@@ -28,6 +28,14 @@ pip-delete-this-directory.txt
 # Virtual Environment
 venv/
 ENV/
+
+# Large binary artifacts
+*.npy
+*.npz
+*.pth
+*.pt
+outputs/
+work_dir/
 env/
 .venv
 
@@ -89,7 +97,31 @@ coverage/
 # Medical Data (DO NOT commit patient data!)
 *.dcm
 *.DICOM
+*.nii.gz
+*.nii
 outputs/*.png
+
+# Large data & experiment artifacts (DO NOT commit!)
+data/
+figures/
+legacy/
+result/
+
+# Secrets & credentials
+service/medsam-key.json
+*.key
+*.pem
+
+# Demo / test artifacts
+demo.png
+testdata/
+test_original.png
+test_original_with_bbox.png
+
+# Large video assets
+*.mp4
+*.avi
+*.mov
 outputs/*.jpg
 outputs/*.npy
 outputs/*.npz

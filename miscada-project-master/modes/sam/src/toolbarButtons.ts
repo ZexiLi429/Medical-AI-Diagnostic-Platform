@@ -217,6 +217,16 @@ const toolbarButtons: Button[] = [
     },
   },
   {
+    id: 'RectangleROI',
+    uiType: 'ohif.radioGroup',
+    props: {
+      icon: 'tool-roi-rectangle',
+      label: 'Rectangle ROI',
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
+  {
     id: 'TrackballRotate',
     uiType: 'ohif.toolButton',
     props: {
@@ -460,6 +470,37 @@ const toolbarButtons: Button[] = [
           name: 'evaluate.viewport.supported',
           unsupportedViewportTypes: ['video', 'wholeSlide'],
         },
+      ],
+    },
+  },
+  {
+    id: 'TotalSegmentAll',
+    uiType: 'ohif.toolBoxButton',
+    props: {
+      icon: 'icon-transferring',
+      label: 'Segment All Organs',
+      tooltip: '一键分割全部器官（TotalSegmentator, 104 器官, port 8004）。约 50 秒完成。',
+      commands: 'totalSegmentAll',
+      evaluate: [
+        'evaluate.action',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video', 'wholeSlide'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'SegmentOrganByName',
+    uiType: 'ohif.toolBoxButton',
+    props: {
+      icon: 'icon-tool-search',
+      label: 'Segment Organ...',
+      tooltip: '输入器官名（如 liver, spleen, kidney_left），仅分割该器官。约 60 秒。',
+      commands: 'segmentOrganByName',
+      evaluate: [
+        'evaluate.action',
+        { name: 'evaluate.viewport.supported', unsupportedViewportTypes: ['video', 'wholeSlide'] },
       ],
     },
   },

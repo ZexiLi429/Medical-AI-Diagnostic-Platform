@@ -12,7 +12,7 @@ const ohif = {
 
 const cornerstone = {
   viewport: '@ohif/extension-cornerstone.viewportModule.cornerstone',
-  panelTool: '@ohif/extension-cornerstone.panelModule.panelSegmentationWithTools',
+  panelTool: '@ohif/extension-cornerstone.panelModule.panelSegmentationWithAI',
   measurements: '@ohif/extension-cornerstone.panelModule.panelMeasurement',
 };
 
