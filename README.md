@@ -1,6 +1,6 @@
 # CT Analysis Platform — Multi-Agent Diagnostic System
 
-<video src="https://raw.githubusercontent.com/ZexiLi429/Medical-AI-Diagnostic-Platform/master/demo.mp4" controls width="100%"></video>
+https://github.com/ZexiLi429/Medical-AI-Diagnostic-Platform/blob/master/demo.mp4
 
 > **Dissertation Project**: Computer-aided CT analysis platform integrating real-time 3D visualisation, multi-organ segmentation, box-guided lesion detection, and LLM-powered diagnostic report generation.
 
