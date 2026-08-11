@@ -15,7 +15,7 @@
 
 ---
 
-<a href="https://github.com/ZexiLi429/Medical-AI-Diagnostic-Platform/blob/master/demo.mp4">
+<a href="https://raw.githubusercontent.com/ZexiLi429/Medical-AI-Diagnostic-Platform/master/demo.mp4">
   <img src="demo.png" alt="Demo Video" width="100%">
 </a>
 <p align="center"><em>👆 Click the image to watch the demo video</em></p>

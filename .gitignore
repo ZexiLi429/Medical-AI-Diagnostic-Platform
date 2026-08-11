@@ -113,13 +113,13 @@ service/medsam-key.json
 *.pem
 
 # Demo / test artifacts
-demo.png
 testdata/
 test_original.png
 test_original_with_bbox.png
 
 # Large video assets
 *.mp4
+!demo.mp4
 *.avi
 *.mov
 outputs/*.jpg
