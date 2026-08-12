@@ -1,72 +1,94 @@
 <div align="center">
 
-#  Medical AI Diagnostic Platform
+<div align="center">
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
+# 🏥 MISCADA
+
+### Multi-Agent Collaborative CT Intelligent Segmentation & Diagnostic Report Platform
+
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-3178C6)](https://typescriptlang.org)
+[![React](https://img.shields.io/badge/React-18-61DAFB)](https://react.dev)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-009688)](https://fastapi.tiangolo.com)
-[![Docker](https://img.shields.io/badge/Docker-24.0%2B-2496ED)](https://docker.com)
-[![TotalSegmentator](https://img.shields.io/badge/TotalSegmentator-v2_117--class-orange)](https://github.com/wasserth/TotalSegmentator)
-[![LLM](https://img.shields.io/badge/LLM-Llama_3.3_70B-purple)](https://groq.com)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C)](https://pytorch.org)
+[![MedSAM](https://img.shields.io/badge/Segmentation-MedSAM%2FMedSAM2-blueviolet)](https://github.com/bowang-lab/MedSAM)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**Computer-Aided CT Analysis with Real-Time 3D Visualisation & Multi-Agent Report Generation**
+**2D Lesion Segmentation → 3D Full-Sequence Tracking → Structured Radiology Report Generation**
 
 </div>
 
 ---
 
-<a href="https://github.com/ZexiLi429/Medical-AI-Diagnostic-Platform/issues/1#issue-5124351836">
+<a href="https://github.com/ZexiLi429/Medical-AI-Diagnostic-Platform/blob/master/demo.mp4">
   <img src="demo.png" alt="Demo Video" width="100%">
 </a>
-<p align="center"><em>👆 Click the image to view the demo video (GitHub Issues)</em></p>
+<p align="center"><em>👆 Click the image to watch the demo video</em></p>
 
 ---
 
-##  Overview
+## 🧠 Overview
 
-A dissertation platform integrating **117-class anatomical segmentation**, **box-guided lesion detection** (liver / lung / kidney), and **LLM-powered diagnostic report generation** into a unified CT analysis workflow. Designed for CPU-only deployment with adaptive Z-axis downsampling and dual-level inference caching.
+MISCADA is a self-developed research platform that builds a **multi-agent collaborative CT image analysis system**, covering the full closed loop from 2D lesion segmentation to 3D full-sequence tracking to structured radiology report generation. Based on **OHIF Viewer + Cornerstone3D** for medical imaging interaction, integrated with **MedSAM/MedSAM2** for AI segmentation, and powered by a self-developed **Analyze → Evaluate → Report** three-agent pipeline. Unified DICOM spatial metadata (IPP/IOP/PixelSpacing) enables sub-millimeter precision alignment across coordinate systems, achieving accurate lesion quantification and automatic structured English report generation.
 
-## Architecture
+## 🏗 Architecture
 
 ```
-OHIF/vtk.js Frontend (:3000)     ← 2D MPR + 3D Volume Rendering + Organ Meshes
+OHIF Viewer + Cornerstone3D (:3000)     ← 2D MPR · 3D Volume Rendering · Interactive Annotation
         │
-FastAPI Backend (:8004)          ← Orchestration · Caching · Coordinate Recovery
+FastAPI Backend (:8004)                 ← Orchestration · Session State · DICOM Metadata Parsing
         │
-   ┌────┼────┐
-   ▼    ▼     ▼
-Docker: TotalSegmentator v2 (117 organs + 3 lesion models)
-Docker: Orthanc PACS (:8042)
-Docker: MedSAM2 (:8003, interactive refinement)
+   ┌────┼────────┐
+   ▼    ▼         ▼
+MedSAM/MedSAM2    Orthanc PACS (:8042)    LLM (Groq)
+Lesion Seg.       DICOM Storage          Report Gen.
         │
-   Groq API → Llama 3.3 70B      ← Diagnostic Report Generation
+   ─────┼────────────────────────────────
+        │
+   Three-Agent Pipeline
+   Analyze → Evaluate → Report
 ```
 
-##  Features
+## ✨ Key Features
 
-| Category | Capability |
-|----------|------------|
-|  **Segmentation** | 117 anatomical structures via TotalSegmentator v2 |
-| **Lesion Detection** | Box-guided: liver lesions · lung nodules · kidney cysts |
-|  **Semantic Queries** | Natural-language organ lookup (`"left lung"`, `"rib"`) |
-|  **3D Visualisation** | vtk.js volume rendering with semi-transparent organ meshes |
-|  **Report Generation** | Three-agent workflow: Analysis → Evaluation → Generation |
-|  **Performance** | Adaptive Z downsampling · Dual-level cache · CPU-only |
+### 🔬 DICOM 3D Coordinate Calibration & Mesh Auto-Alignment
+Parsing DICOM metadata strings returned by Orthanc PACS to uniformly extract pixel spacing, image position (IPP), and direction cosines (IOP). Lesion masks are reconstructed into 3D surface meshes via Marching Cubes and transformed to physical coordinates through the DICOM standard coordinate system. The frontend directly consumes physical coordinates to construct rendering geometry with origin offset, achieving **sub-millimeter precision auto-overlay** of lesion 3D meshes onto volume-rendered CT data.
 
-##  Quick Start
+### 🤖 Multi-Agent Report Generation Pipeline
+- **Quantification Agent** — traverses full-sequence masks to compute lesion volume, cross-sectional area, sphericity, CT mean value, and other metrics
+- **Evaluation Agent** — executes medical rule checks including volume consistency, organ range, and slice proportion
+- **Report Agent** — interfaces with LLM to fuse quantitative data, DICOM meta-information, and clinician-provided history, generating structured English reports with differential diagnoses and clinical guideline references
+
+### 🎯 RLE Mask Intersection Post-Processing
+Implements Run-Length Encoding (RLE) mask intersection: AI segmentation output and clinician annotation masks are decoded → pixel-wise AND → re-encoded, precisely constraining segmentation results within the region of interest to eliminate cross-organ over-segmentation.
+
+### 🔗 UUID Session Full-Chain State Management
+Create → Segment → Report endpoints linked through a global session ID spanning the entire workflow. Backend in-memory dictionary manages session state including segmentation results and analysis caches. Progress endpoint provides real-time bidirectional progress streaming. Frontend dynamically injects clinician-selected organs and medical history when requesting reports, with support for in-session analysis overwrites.
+
+### 📄 Native PDF Report Layout & Interaction
+Text-native layout with automatic line breaking, intelligent pagination, and side-by-side image embedding. Dynamic hiding of interface controls during generation. Interactive highlights: one-click screenshot preview in modal, completion notification floating action bar, DICOM metadata auto-populated organ selection, global degradation trigger mechanism.
+
+## 🛠 Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| **Frontend** | TypeScript · React 18 · OHIF Viewer · Cornerstone3D · vtk.js |
+| **Backend** | Python · FastAPI · PyTorch |
+| **AI Models** | MedSAM · MedSAM2 · TotalSegmentator v2 |
+| **PACS** | Orthanc (DICOMweb) |
+| **LLM** | Groq API · Llama 3.3 70B |
+| **Data** | DICOM · NIfTI · RLE Encoding |
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- **Python 3.10+** · **Docker 24.0+** · **Node.js 18+**
+- **Python 3.10+** · **Node.js 18+** · **Docker 24.0+**
 - **Groq API key** ([free tier](https://console.groq.com))
 
-### 1. Docker Containers
+### 1. Docker
 
 ```bash
-# Orthanc PACS
 docker run -d --name orthanc --network=host jodogne/orthanc-plugins
-
-# TotalSegmentator (auto-pulled by backend on first use)
 docker pull wasserth/totalsegmentator:latest
 ```
 
@@ -86,49 +108,35 @@ cd miscada-project-master
 yarn install && yarn start          # → http://localhost:3000
 ```
 
-### 4. Load Data
+Upload DICOM to Orthanc (`:8042`) → open viewer → segmentation triggers automatically.
 
-Upload DICOM to Orthanc (`:8042`) → open OHIF (`:3000`) → segmentation triggers automatically.
-
-##  API Endpoints
+## 📡 API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/segment_3d` | 117-organ segmentation → 3D meshes |
-| `POST` | `/segment_by_name` | Query-specific organ (`"liver"`, `"left lung"`) |
-| `POST` | `/segment_file` | Segment a NIfTI file directly |
+| `POST` | `/segment_3d` | Full organ segmentation → 3D meshes |
+| `POST` | `/segment_by_name` | Semantic organ query |
 | `POST` | `/segment_lesion` | Box-guided lesion detection |
-| `POST` | `/analyze_lesions` | LLM: identify suspicious organs |
-| `POST` | `/generate_report` | Full diagnostic report |
+| `POST` | `/generate_report` | Three-agent diagnostic report |
+| `POST` | `/analyze_lesions` | LLM lesion analysis |
 | `GET` | `/health` | Health check |
+| `GET` | `/progress/{session_id}` | Real-time progress streaming |
 
-##  Key Results
-
-| Metric | Value | Notes |
-|--------|-------|-------|
-| Processing Time | 1.3–5.8 min | 5 Orthanc cases, ≤400 slices |
-| Kidney Dice | 0.76 ± 0.14 | KiTS19 NIfTI, provenance-matched GT |
-| Coordinate Alignment | 0.00 mm origin delta | TS mesh ↔ DICOM world |
-| Organ Classes | 117 | TotalSegmentator v2 |
-| Lesion Models | 3 | Liver · Lung · Kidney |
-
-→ Full data: [`result/experiment_results/`](result/experiment_results/)
-
-##  Structure
+## 📁 Structure
 
 ```
 ├── totalseg_service.py      # FastAPI backend (port 8004)
 ├── demo.mp4 / demo.png      # Demo media
+├── miscada-project-master/  # OHIF + Cornerstone3D frontend
+├── MedSAM2/                 # MedSAM2 inference + report agent
+├── MedSAM-main/             # MedSAM v1
+├── MedSAM-LiteMedSAM/       # LiteMedSAM
 ├── service/                 # Deployed service copy
 ├── test/                    # Experiment & evaluation scripts
 ├── figures/                 # Thesis figure generation
-├── result/                  # Experimental results (JSON, CSV, NPY)
-├── data/                    # Dataset download & lookup utilities
-├── legacy/                  # Deprecated scripts
-├── miscada-project-master/  # OHIF vtk.js frontend
-├── MedSAM2/                 # MedSAM2 inference + report agent
-├── MedSAM-main/             # MedSAM v1
-└── MedSAM-LiteMedSAM/       # LiteMedSAM models
+├── result/                  # Experimental results
+├── data/                    # Dataset utilities
+└── legacy/                  # Deprecated scripts
 ```
 
 ## License
