@@ -15,18 +15,18 @@
 
 ---
 
-<a href="https://raw.githubusercontent.com/ZexiLi429/Medical-AI-Diagnostic-Platform/master/demo.mp4">
+<a href="https://github.com/ZexiLi429/Medical-AI-Diagnostic-Platform/issues/1#issue-5124351836">
   <img src="demo.png" alt="Demo Video" width="100%">
 </a>
-<p align="center"><em>👆 Click the image to watch the demo video</em></p>
+<p align="center"><em>👆 Click the image to view the demo video (GitHub Issues)</em></p>
 
 ---
 
-## 🧠 Overview
+##  Overview
 
 A dissertation platform integrating **117-class anatomical segmentation**, **box-guided lesion detection** (liver / lung / kidney), and **LLM-powered diagnostic report generation** into a unified CT analysis workflow. Designed for CPU-only deployment with adaptive Z-axis downsampling and dual-level inference caching.
 
-## 🏗 Architecture
+## Architecture
 
 ```
 OHIF/vtk.js Frontend (:3000)     ← 2D MPR + 3D Volume Rendering + Organ Meshes
@@ -46,12 +46,12 @@ Docker: MedSAM2 (:8003, interactive refinement)
 
 | Category | Capability |
 |----------|------------|
-| 🔬 **Segmentation** | 117 anatomical structures via TotalSegmentator v2 |
-| 🎯 **Lesion Detection** | Box-guided: liver lesions · lung nodules · kidney cysts |
-| 🗣 **Semantic Queries** | Natural-language organ lookup (`"left lung"`, `"rib"`) |
-| 🩻 **3D Visualisation** | vtk.js volume rendering with semi-transparent organ meshes |
-| 📝 **Report Generation** | Three-agent workflow: Analysis → Evaluation → Generation |
-| ⚡ **Performance** | Adaptive Z downsampling · Dual-level cache · CPU-only |
+|  **Segmentation** | 117 anatomical structures via TotalSegmentator v2 |
+| **Lesion Detection** | Box-guided: liver lesions · lung nodules · kidney cysts |
+|  **Semantic Queries** | Natural-language organ lookup (`"left lung"`, `"rib"`) |
+|  **3D Visualisation** | vtk.js volume rendering with semi-transparent organ meshes |
+|  **Report Generation** | Three-agent workflow: Analysis → Evaluation → Generation |
+|  **Performance** | Adaptive Z downsampling · Dual-level cache · CPU-only |
 
 ## 🚀 Quick Start
 
@@ -102,7 +102,7 @@ Upload DICOM to Orthanc (`:8042`) → open OHIF (`:3000`) → segmentation trigg
 | `POST` | `/generate_report` | Full diagnostic report |
 | `GET` | `/health` | Health check |
 
-## 📊 Key Results
+##  Key Results
 
 | Metric | Value | Notes |
 |--------|-------|-------|

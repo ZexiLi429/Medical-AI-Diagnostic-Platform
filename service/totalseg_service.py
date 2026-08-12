@@ -6,6 +6,9 @@ TotalSegmentator 全器官分割服务 (port 8004)
 - GET  /health             →  健康检查
 - 自动从 Orthanc 读取 DICOM 序列，运行 TotalSegmentator 推理
 """
+from dotenv import load_dotenv
+load_dotenv()
+
 import multiprocessing
 if 'win' in __import__('sys').platform:
     multiprocessing.set_start_method("spawn", force=True)
