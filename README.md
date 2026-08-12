@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🏥 Medical AI Diagnostic Platform
+#  Medical AI Diagnostic Platform
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-009688)](https://fastapi.tiangolo.com)
@@ -42,7 +42,7 @@ Docker: MedSAM2 (:8003, interactive refinement)
    Groq API → Llama 3.3 70B      ← Diagnostic Report Generation
 ```
 
-## ✨ Features
+##  Features
 
 | Category | Capability |
 |----------|------------|
@@ -53,7 +53,7 @@ Docker: MedSAM2 (:8003, interactive refinement)
 |  **Report Generation** | Three-agent workflow: Analysis → Evaluation → Generation |
 |  **Performance** | Adaptive Z downsampling · Dual-level cache · CPU-only |
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 
@@ -90,7 +90,7 @@ yarn install && yarn start          # → http://localhost:3000
 
 Upload DICOM to Orthanc (`:8042`) → open OHIF (`:3000`) → segmentation triggers automatically.
 
-## 📡 API Endpoints
+##  API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -114,7 +114,7 @@ Upload DICOM to Orthanc (`:8042`) → open OHIF (`:3000`) → segmentation trigg
 
 → Full data: [`result/experiment_results/`](result/experiment_results/)
 
-## 📁 Structure
+##  Structure
 
 ```
 ├── totalseg_service.py      # FastAPI backend (port 8004)
