@@ -1,8 +1,5 @@
 """
 LiteMedSAM FastAPI Service
-基于轻量化 TinyViT 的医学影像快速分割服务
-推理速度比原版 MedSAM 快 5-10x，CPU 也能流畅运行
-端口: 8002  (MedSAM-main 用 8000, MedSAM2 用 8003)
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))

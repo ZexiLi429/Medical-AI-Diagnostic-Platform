@@ -1,6 +1,5 @@
 """
-MedSAM FastAPI Service - 修复版
-医学影像分割API服务 - 兼容前端接口
+MedSAM FastAPI Service 
 """
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware

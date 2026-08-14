@@ -1,6 +1,5 @@
 """
 LLM Medical Diagnostic Service
-整合大语言模型与医学影像分析，生成诊断报告
 """
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
